@@ -1,14 +1,22 @@
 services:
   monitor:
-    build: .
-    container_name: tg-lead-monitor
+    build:
+      context: .
+      dockerfile: Dockerfile
+
     restart: unless-stopped
-    env_file: .env
+
+    env_file:
+      - .env
+
     volumes:
-      - ./config:/app/config:ro
-      - ./data:/app/data
+      - lead-monitor-data:/app/data
+
     logging:
       driver: json-file
       options:
         max-size: "20m"
         max-file: "5"
+
+volumes:
+  lead-monitor-data:
