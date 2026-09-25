@@ -60,7 +60,12 @@ class Pipeline:
         # дедупликация (только для лидов — потенциальные и мусор не уведомляются)
         dup = None
         if status == "lead":
-            dup = self.dedup.find_duplicate(c.hash, c.normalized, msg.user_id)
+            dup = self.dedup.find_duplicate(
+                c.hash,
+                c.normalized,
+                msg.user_id,
+                msg.date,
+            )
             if dup:
                 status = "duplicate"
 

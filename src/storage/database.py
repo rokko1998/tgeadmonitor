@@ -132,20 +132,58 @@ class Database:
                 [(message_id, rule, category, text, weight) for rule, category, text, weight in rows])
 
     # ---------- dedup ----------
-    def find_message_by_hash(self, text_hash: str, window_days: int) -> int | None:
-        since = _utc(datetime.now(timezone.utc) - timedelta(days=window_days))
+    def find_message_by_hash(
+            self,
+            text_hash: str,
+            window_days: int,
+            reference_date: datetime | None = None,
+    ) -> int | None:
+        ref = reference_date or datetime.now(timezone.utc)
+        since = _utc(ref - timedelta(days=window_days))
+        until = _utc(ref)
+
         row = self.conn.execute(
-            "SELECT id FROM messages WHERE text_hash=? AND created_at>=? ORDER BY id LIMIT 1",
-            (text_hash, since)).fetchone()
+            """
+            SELECT id
+            FROM messages
+            WHERE text_hash=?
+              AND date>=?
+              AND date<=?
+            ORDER BY date DESC
+            LIMIT 1
+            """,
+            (text_hash, since, until),
+        ).fetchone()
+
         return int(row["id"]) if row else None
 
-    def recent_lead_texts(self, window_days: int, limit: int) -> list[tuple[int, int | None, str]]:
-        since = _utc(datetime.now(timezone.utc) - timedelta(days=window_days))
+    def recent_lead_texts(
+            self,
+            window_days: int,
+            limit: int,
+            reference_date: datetime | None = None,
+    ) -> list[tuple[int, int | None, str]]:
+        ref = reference_date or datetime.now(timezone.utc)
+        since = _utc(ref - timedelta(days=window_days))
+        until = _utc(ref)
+
         rows = self.conn.execute(
-            """SELECT id, user_id, normalized_text FROM messages
-               WHERE status IN ('lead','duplicate') AND created_at>=? ORDER BY id DESC LIMIT ?""",
-            (since, limit)).fetchall()
-        return [(int(r["id"]), r["user_id"], r["normalized_text"]) for r in rows]
+            """
+            SELECT id, user_id, normalized_text
+            FROM messages
+            WHERE status IN ('lead', 'duplicate')
+              AND date>=?
+              AND date<=?
+            ORDER BY date DESC
+            LIMIT ?
+            """,
+            (since, until, limit),
+        ).fetchall()
+
+        return [
+            (int(r["id"]), r["user_id"], r["normalized_text"])
+            for r in rows
+        ]
 
     # ---------- leads ----------
     def insert_lead(self, message_id: int, product: str | None, location: str | None,
