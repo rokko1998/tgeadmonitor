@@ -41,7 +41,7 @@ class Listener:
         """Разрешает username -> chat_id, проверяет доступ ко всем чатам. Возвращает доступные."""
         ok: list[Chat] = []
         for chat in self.chats:
-            ref = chat.chat_id if chat.chat_id is not None else chat.username
+            ref = chat.username if chat.username else chat.chat_id
             try:
                 entity = await self.client.get_entity(ref)
             except (RPCError, ValueError) as e:
