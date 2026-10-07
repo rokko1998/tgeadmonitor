@@ -1,8 +1,6 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime
-
 
 @dataclass
 class IncomingMessage:
@@ -17,16 +15,17 @@ class IncomingMessage:
     message_url: str | None
     is_bot: bool = False
 
-
 @dataclass
 class LeadRecord:
     lead_id: int
     message_id: int
     message: IncomingMessage
+    lead_type: str
+    source_type: str
     product: str | None
     location: str | None
     amount: str | None
     size: str | None
     score: int
     explanation: str
-    found: list[tuple[str, str]]  # (feature, text)
+    found: list[tuple[str, str]]

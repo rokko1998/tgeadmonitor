@@ -1,0 +1,7 @@
+# Low-value sources we do not want in the active monitor.
+disabled_kinds:
+  - барахолка
+
+disabled_id_contains:
+  - baraholka
+  - barakholka

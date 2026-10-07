@@ -1,26 +1,22 @@
-"""Применение словарей и regex. Возвращает список совпадений и набор признаков."""
+"""Regex/dictionary matcher."""
 from __future__ import annotations
-
 import re
 from dataclasses import dataclass, field
-
 from src.config.loader import AppConfig, Chat
 from src.processing.extractor import SurfaceFeatures
 
-
 @dataclass(frozen=True)
 class Match:
-    feature: str          # intent, product, size, amount, location, context, sell, ad, url, ...
-    rule: str             # id правила
-    text: str             # что именно совпало
-    value: str | None = None  # нормализованное значение (название товара, локации, размер)
-
+    feature: str
+    rule: str
+    text: str
+    value: str | None = None
 
 @dataclass
 class MatchResult:
     matches: list[Match] = field(default_factory=list)
     features: set[str] = field(default_factory=set)
-    products: list[str] = field(default_factory=list)   # имена товаров (уникальные, по порядку)
+    products: list[str] = field(default_factory=list)
     product_ids: list[str] = field(default_factory=list)
     sizes: list[str] = field(default_factory=list)
     amounts: list[str] = field(default_factory=list)
@@ -34,7 +30,6 @@ class MatchResult:
             self.matches.append(m)
         self.features.add(feature)
 
-
 class Matcher:
     def __init__(self, cfg: AppConfig):
         self.cfg = cfg
@@ -42,23 +37,18 @@ class Matcher:
         self._in_stock = re.compile(r"\bв\s+наличии\b")
         self._opt_roznica = re.compile(r"\bопт\w*\s+и\s+в\s+розниц\w*|\bопт\s*/\s*розниц\w*")
 
-    # ---------- helpers ----------
     @staticmethod
     def _negated(norm: str, start: int) -> bool:
-        prefix = norm[max(0, start - 3):start]
-        return prefix.endswith("не ")
+        return norm[max(0, start - 3):start].endswith("не ")
 
     @staticmethod
     def _joined_groups(m: re.Match) -> str:
         parts = [g.replace(",", ".") for g in m.groups() if g]
         return "x".join(parts) if parts else m.group(0)
 
-    # ---------- main ----------
     def match(self, norm: str, orig: str, surface: SurfaceFeatures, chat: Chat | None) -> MatchResult:
-        r = MatchResult()
-        cfg = self.cfg
+        r, cfg = MatchResult(), self.cfg
 
-        # 1. Purchase intent (с учётом отрицания "не нужна")
         for rule in cfg.intents:
             for m in rule.regex.finditer(norm):
                 if self._negated(norm, m.start()):
@@ -69,13 +59,8 @@ class Matcher:
                     r.features.add("intent_strong")
                 break
 
-        # 2. Products + product-specific sizes
         for p in cfg.products:
-            found = None
-            for rx in p.patterns:
-                found = rx.search(norm)
-                if found:
-                    break
+            found = next((rx.search(norm) for rx in p.patterns if rx.search(norm)), None)
             if not found:
                 continue
             r.add("product", p.id, found.group(0), value=p.name)
@@ -90,15 +75,13 @@ class Matcher:
                     if val not in r.sizes:
                         r.sizes.append(val)
 
-        # 3. Generic sizes (40x20x2)
         for rx in cfg.size_patterns:
             for sm in rx.finditer(norm):
                 val = self._joined_groups(sm)
                 r.add("size", "size", sm.group(0), value=val)
                 if val not in r.sizes:
-                    r.sizes.insert(0, val)  # явный типоразмер важнее одиночного числа
+                    r.sizes.insert(0, val)
 
-        # 4. Amounts
         for rx in cfg.amount_patterns:
             for am in rx.finditer(norm):
                 val = am.group(0)
@@ -106,62 +89,56 @@ class Matcher:
                 if val not in r.amounts:
                     r.amounts.append(val)
 
-        # 5. Locations (текст -> иначе fallback на локацию чата)
         for loc in cfg.locations:
             for rx in loc.patterns:
                 lm = rx.search(norm)
                 if lm:
                     r.add("location", loc.name, lm.group(0), value=loc.name)
-                    if r.location is None:
-                        r.location = loc.name
+                    r.location = r.location or loc.name
                     break
         if r.location is None and chat and chat.location:
             r.location = chat.location
             r.location_from_chat = True
             r.features.add("location_fallback")
 
-        # 6. Construction context
         for rule in cfg.context_rules:
-            cm = rule.regex.search(norm)
-            if cm:
-                r.add("context", rule.id, cm.group(0))
+            m = rule.regex.search(norm)
+            if m:
+                r.add("context", rule.id, m.group(0))
 
-        # 7. Sell / noise
+        for rule in cfg.project_signal_rules:
+            m = rule.regex.search(norm)
+            if m:
+                r.add("project_signal", rule.id, m.group(0))
+
+        for rule in cfg.professional_actor_rules:
+            m = rule.regex.search(norm)
+            if m:
+                r.add("professional_actor", rule.id, m.group(0))
+
         for rule in cfg.sell_rules:
-            sm = rule.regex.search(norm)
-            if sm:
-                r.add("sell", rule.id, sm.group(0))
+            m = rule.regex.search(norm)
+            if m:
+                r.add("sell", rule.id, m.group(0))
 
-        # 8. Question
         if surface.is_question:
             r.add("question", "question", "?")
-
-        # 9. URL и рекламные признаки
         if surface.urls:
             r.add("url", "url", surface.urls[0])
         if len(r.product_ids) >= cfg.ad.many_products_threshold:
             r.add("many_products", "many_products", ", ".join(r.products))
 
-        ad_flags: list[str] = []
-        if surface.phones:
-            ad_flags.append("phone")
-        if surface.urls:
-            ad_flags.append("url")
-        if surface.usernames:
-            ad_flags.append("username")
-        if len(surface.prices) >= cfg.ad.price_count_threshold:
-            ad_flags.append("prices")
-        if "many_products" in r.features:
-            ad_flags.append("many_products")
-        if self._delivery.search(norm) and self._in_stock.search(norm):
-            ad_flags.append("delivery+stock")
-        if self._opt_roznica.search(norm):
-            ad_flags.append("wholesale+retail")
-        if surface.emoji_count >= cfg.ad.emoji_threshold:
-            ad_flags.append("emoji")
+        flags = []
+        if surface.phones: flags.append("phone")
+        if surface.urls: flags.append("url")
+        if surface.usernames: flags.append("username")
+        if len(surface.prices) >= cfg.ad.price_count_threshold: flags.append("prices")
+        if "many_products" in r.features: flags.append("many_products")
+        if self._delivery.search(norm) and self._in_stock.search(norm): flags.append("delivery+stock")
+        if self._opt_roznica.search(norm): flags.append("wholesale+retail")
+        if surface.emoji_count >= cfg.ad.emoji_threshold: flags.append("emoji")
         if surface.letters >= cfg.ad.caps_min_letters and surface.caps_ratio >= cfg.ad.caps_ratio_threshold:
-            ad_flags.append("caps")
-        if len(ad_flags) >= cfg.ad.min_features:
-            r.add("ad", "ad", "+".join(ad_flags))
-
+            flags.append("caps")
+        if len(flags) >= cfg.ad.min_features:
+            r.add("ad", "ad", "+".join(flags))
         return r

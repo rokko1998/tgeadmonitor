@@ -1,12 +1,14 @@
-# Веса признаков. Каждый признак учитывается один раз, сколько бы совпадений ни было.
 weights:
   intent: 5
+  intent_strong: 3
   product: 4
   size: 2
   amount: 2
   location: 2
-  location_fallback: 0   # география взята из чата, а не из текста
+  location_fallback: 0
   context: 1
+  project_signal: 4
+  professional_actor: 2
   question: 1
   sell: -8
   ad: -5
@@ -14,12 +16,10 @@ weights:
   url: -2
 
 thresholds:
-  notify: 8      # >= notify  -> уведомление
-  potential: 5   # >= potential -> сохранить как potential, без уведомления
+  notify: 8
+  project_signal: 6
+  potential: 5
 
-# Hard rules. Доступные признаки: intent, intent_strong, product, size, amount,
-# location, context, question, sell, ad, many_products, url.
-# Сначала проверяются not_lead, затем lead.
 hard_rules:
   not_lead:
     - id: seller_with_product
@@ -29,9 +29,21 @@ hard_rules:
     - id: strong_buy_intent_with_product
       all: [intent_strong, product]
       none: [sell, ad]
+    - id: purchase_intent_with_product
+      all: [intent, product]
+      none: [sell, ad]
+    - id: implicit_request_product_size_question
+      all: [product, size, question]
+      none: [sell, ad]
+    - id: implicit_request_product_amount_question
+      all: [product, amount, question]
+      none: [sell, ad]
+    - id: procurement_specification
+      all: [product, size, amount]
+      none: [sell, ad]
 
 dedup:
   window_days: 7
-  fuzzy_threshold: 90            # похожесть с любым недавним лидом
-  same_user_fuzzy_threshold: 80  # похожесть с недавним лидом того же автора
-  max_candidates: 500
+  fuzzy_threshold: 92
+  same_user_fuzzy_threshold: 82
+  max_candidates: 1000

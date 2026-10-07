@@ -1,31 +1,27 @@
-"""Загрузка и валидация YAML-конфигов. Все regex компилируются здесь, один раз при старте."""
+"""Configuration loader."""
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 import yaml
 
 FLAGS = re.IGNORECASE
-
 KNOWN_FEATURES = {
     "intent", "intent_strong", "product", "size", "amount", "location",
-    "location_fallback", "context", "question", "sell", "ad", "many_products", "url",
+    "location_fallback", "context", "project_signal", "professional_actor",
+    "question", "sell", "ad", "many_products", "url",
 }
-
 
 class ConfigError(Exception):
     pass
-
 
 @dataclass(frozen=True)
 class Rule:
     id: str
     regex: re.Pattern
     strong: bool = False
-
 
 @dataclass(frozen=True)
 class Product:
@@ -35,12 +31,10 @@ class Product:
     patterns: tuple[re.Pattern, ...]
     size_patterns: tuple[re.Pattern, ...]
 
-
 @dataclass(frozen=True)
 class Location:
     name: str
     patterns: tuple[re.Pattern, ...]
-
 
 @dataclass
 class Chat:
@@ -51,10 +45,11 @@ class Chat:
     location: str | None = None
     district: str | None = None
     kind: str | None = None
+    source_type: str = "legacy"
+    require_location: bool = False
     enabled: bool = True
     priority: int = 1
     comment: str | None = None
-
 
 @dataclass(frozen=True)
 class AdSettings:
@@ -65,13 +60,11 @@ class AdSettings:
     caps_ratio_threshold: float = 0.5
     caps_min_letters: int = 20
 
-
 @dataclass(frozen=True)
 class HardRule:
     id: str
     all: tuple[str, ...]
     none: tuple[str, ...]
-
 
 @dataclass(frozen=True)
 class DedupSettings:
@@ -80,22 +73,24 @@ class DedupSettings:
     same_user_fuzzy_threshold: int = 80
     max_candidates: int = 500
 
-
 @dataclass(frozen=True)
 class Scoring:
     weights: dict[str, int]
     notify_threshold: int
+    project_signal_threshold: int
     potential_threshold: int
     lead_rules: tuple[HardRule, ...]
     not_lead_rules: tuple[HardRule, ...]
     dedup: DedupSettings
-
 
 @dataclass
 class AppConfig:
     chats: list[Chat]
     products: list[Product]
     context_rules: list[Rule]
+    project_signal_rules: list[Rule]
+    professional_actor_rules: list[Rule]
+    source_types: tuple[str, ...]
     size_patterns: list[re.Pattern]
     amount_patterns: list[re.Pattern]
     intents: list[Rule]
@@ -109,16 +104,13 @@ class AppConfig:
     def enabled_chats(self) -> list[Chat]:
         return [c for c in self.chats if c.enabled]
 
-
-# ---------- helpers ----------
-
-def _load_yaml(path: Path) -> dict[str, Any]:
+def _load_yaml(path: Path, required: bool = True) -> dict[str, Any]:
     if not path.exists():
-        raise ConfigError(f"Config file not found: {path}")
+        if required:
+            raise ConfigError(f"Config file not found: {path}")
+        return {}
     with path.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    return data or {}
-
+        return yaml.safe_load(f) or {}
 
 def _compile(pattern: str, where: str) -> re.Pattern:
     if not isinstance(pattern, str) or not pattern:
@@ -128,58 +120,88 @@ def _compile(pattern: str, where: str) -> re.Pattern:
     except re.error as e:
         raise ConfigError(f"{where}: invalid regex {pattern!r}: {e}") from e
 
-
 def _compile_list(patterns: list[str] | None, where: str) -> tuple[re.Pattern, ...]:
     return tuple(_compile(p, f"{where}[{i}]") for i, p in enumerate(patterns or []))
 
-
 def _rules(items: list[dict] | None, where: str) -> list[Rule]:
-    rules: list[Rule] = []
-    seen: set[str] = set()
+    result, seen = [], set()
     for i, item in enumerate(items or []):
         rid = str(item.get("id") or f"{where}_{i}")
         if rid in seen:
             raise ConfigError(f"{where}: duplicate rule id {rid!r}")
         seen.add(rid)
-        rules.append(Rule(id=rid, regex=_compile(item.get("pattern"), f"{where}.{rid}"),
-                          strong=bool(item.get("strong", False))))
-    return rules
-
+        result.append(Rule(rid, _compile(item.get("pattern"), f"{where}.{rid}"),
+                           bool(item.get("strong", False))))
+    return result
 
 def _hard_rules(items: list[dict] | None, where: str) -> tuple[HardRule, ...]:
-    out = []
+    result = []
     for i, item in enumerate(items or []):
         rid = str(item.get("id") or f"{where}_{i}")
         all_ = tuple(item.get("all") or [])
         none = tuple(item.get("none") or [])
-        for f in (*all_, *none):
-            if f not in KNOWN_FEATURES:
-                raise ConfigError(f"{where}.{rid}: unknown feature {f!r}")
         if not all_:
             raise ConfigError(f"{where}.{rid}: 'all' must not be empty")
-        out.append(HardRule(id=rid, all=all_, none=none))
-    return tuple(out)
+        for feature in (*all_, *none):
+            if feature not in KNOWN_FEATURES:
+                raise ConfigError(f"{where}.{rid}: unknown feature {feature!r}")
+        result.append(HardRule(rid, all_, none))
+    return tuple(result)
 
-
-# ---------- public ----------
+def _merge_chat_rows(base: list[dict], extra: list[dict]) -> list[dict]:
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for row in [*base, *extra]:
+        username = str(row.get("username") or "").lower()
+        key = f"u:{username}" if username else f"i:{row.get('chat_id', row.get('id'))}"
+        if key not in merged:
+            order.append(key)
+            merged[key] = dict(row)
+        else:
+            # Professional config overrides metadata but keeps a known numeric chat_id.
+            old = merged[key]
+            new = dict(old)
+            new.update(row)
+            if row.get("chat_id") is None and old.get("chat_id") is not None:
+                new["chat_id"] = old["chat_id"]
+            merged[key] = new
+    return [merged[k] for k in order]
 
 def load_config(config_dir: Path) -> AppConfig:
     config_dir = Path(config_dir)
 
-    chats_raw = _load_yaml(config_dir / "chats.yaml").get("chats") or []
-    chats = []
-    for i, c in enumerate(chats_raw):
+    source_types = tuple(str(x) for x in
+                         (_load_yaml(config_dir / "source_types.yaml").get("source_types") or []))
+    if not source_types:
+        raise ConfigError("source_types.yaml: source_types is empty")
+
+    base_rows = _load_yaml(config_dir / "chats.yaml").get("chats") or []
+    professional_rows = _load_yaml(config_dir / "professional_chats.yaml").get("chats") or []
+    policy = _load_yaml(config_dir / "source_policy.yaml").copy()
+    disabled_kinds = {str(x).lower() for x in policy.get("disabled_kinds") or []}
+    disabled_id_contains = [str(x).lower() for x in policy.get("disabled_id_contains") or []]
+
+    chats: list[Chat] = []
+    for i, c in enumerate(_merge_chat_rows(base_rows, professional_rows)):
         if not c.get("id"):
-            raise ConfigError(f"chats.yaml[{i}]: 'id' is required")
+            raise ConfigError(f"chats[{i}]: 'id' is required")
         if c.get("chat_id") is None and not c.get("username"):
-            raise ConfigError(f"chats.yaml[{c['id']}]: chat_id or username is required")
+            raise ConfigError(f"chats[{c['id']}]: chat_id or username is required")
+        source_type = str(c.get("source_type") or "legacy")
+        if source_type not in source_types:
+            raise ConfigError(f"chats[{c['id']}]: unknown source_type {source_type!r}")
+        enabled = bool(c.get("enabled", True))
+        kind = str(c.get("kind") or "")
+        cid = str(c["id"]).lower()
+        if kind.lower() in disabled_kinds or any(x in cid for x in disabled_id_contains):
+            enabled = False
         chats.append(Chat(
             id=str(c["id"]), name=str(c.get("name") or c["id"]),
             chat_id=int(c["chat_id"]) if c.get("chat_id") is not None else None,
-            username=(c.get("username") or None), location=c.get("location"),
-            district=c.get("district"), kind=c.get("kind"),
-            enabled=bool(c.get("enabled", True)), priority=int(c.get("priority", 1)),
-            comment=c.get("comment"),
+            username=c.get("username") or None, location=c.get("location"),
+            district=c.get("district"), kind=c.get("kind"), source_type=source_type,
+            require_location=bool(c.get("require_location", False)),
+            enabled=enabled, priority=int(c.get("priority", 1)), comment=c.get("comment"),
         ))
 
     prod_raw = _load_yaml(config_dir / "products.yaml")
@@ -193,15 +215,21 @@ def load_config(config_dir: Path) -> AppConfig:
             raise ConfigError(f"products.{pid}: 'patterns' must not be empty")
         products.append(Product(
             id=str(pid), name=str(p.get("name") or pid), group=str(p.get("group") or ""),
-            patterns=pats, size_patterns=_compile_list(p.get("size_patterns"), f"products.{pid}.size_patterns"),
+            patterns=pats,
+            size_patterns=_compile_list(p.get("size_patterns"), f"products.{pid}.size_patterns"),
         ))
     context_rules = _rules(prod_raw.get("construction_context"), "construction_context")
     size_patterns = list(_compile_list(prod_raw.get("sizes"), "sizes"))
     amount_patterns = list(_compile_list(prod_raw.get("amounts"), "amounts"))
 
-    intents = _rules(_load_yaml(config_dir / "intents.yaml").get("purchase_intents"), "purchase_intents")
+    intents = _rules(_load_yaml(config_dir / "intents.yaml").get("purchase_intents"),
+                     "purchase_intents")
     if not intents:
         raise ConfigError("intents.yaml: purchase_intents is empty")
+
+    signals = _load_yaml(config_dir / "project_signals.yaml")
+    project_signal_rules = _rules(signals.get("project_signals"), "project_signals")
+    professional_actor_rules = _rules(signals.get("professional_actors"), "professional_actors")
 
     excl_raw = _load_yaml(config_dir / "exclusions.yaml")
     sell_rules = _rules(excl_raw.get("sell_intents"), "sell_intents")
@@ -218,18 +246,19 @@ def load_config(config_dir: Path) -> AppConfig:
         pats = _compile_list(loc.get("patterns"), f"locations.{loc['name']}")
         if not pats:
             raise ConfigError(f"locations.{loc['name']}: 'patterns' must not be empty")
-        locations.append(Location(name=str(loc["name"]), patterns=pats))
+        locations.append(Location(str(loc["name"]), pats))
 
     sc_raw = _load_yaml(config_dir / "scoring.yaml")
     weights = {str(k): int(v) for k, v in (sc_raw.get("weights") or {}).items()}
-    for k in weights:
-        if k not in KNOWN_FEATURES:
-            raise ConfigError(f"scoring.yaml: unknown weight key {k!r}")
+    for key in weights:
+        if key not in KNOWN_FEATURES:
+            raise ConfigError(f"scoring.yaml: unknown weight key {key!r}")
     thresholds = sc_raw.get("thresholds") or {}
     hard = sc_raw.get("hard_rules") or {}
     scoring = Scoring(
         weights=weights,
         notify_threshold=int(thresholds.get("notify", 8)),
+        project_signal_threshold=int(thresholds.get("project_signal", 6)),
         potential_threshold=int(thresholds.get("potential", 5)),
         lead_rules=_hard_rules(hard.get("lead"), "hard_rules.lead"),
         not_lead_rules=_hard_rules(hard.get("not_lead"), "hard_rules.not_lead"),
@@ -239,7 +268,9 @@ def load_config(config_dir: Path) -> AppConfig:
 
     return AppConfig(
         chats=chats, products=products, context_rules=context_rules,
-        size_patterns=size_patterns, amount_patterns=amount_patterns,
+        project_signal_rules=project_signal_rules,
+        professional_actor_rules=professional_actor_rules,
+        source_types=source_types, size_patterns=size_patterns, amount_patterns=amount_patterns,
         intents=intents, sell_rules=sell_rules, hard_exclusions=hard_exclusions,
         min_length=min_length, ad=ad, locations=locations, scoring=scoring,
     )

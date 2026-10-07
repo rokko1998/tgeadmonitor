@@ -1,0 +1,12 @@
+source_types:
+  - legacy
+  - unclassified
+  - builders
+  - welders
+  - subcontract
+  - procurement
+  - metalwork
+  - hvac
+  - plumbing
+  - business
+  - jobs
