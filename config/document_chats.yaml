@@ -1,0 +1,89 @@
+# Explicit addresses from the operator's Google document (2026-10-20).
+# The monitor account joins these sequentially after startup, if not already a member.
+# No geography is required. Entries containing only a title are documented in docs/sources.md.
+chats:
+  - id: avito_remont
+    username: Avito_Remont
+    name: Ремонт квартир Москва и МО
+    source_type: builders
+    auto_join: true
+    require_location: false
+  - id: stroitelnye_materialy
+    username: stroitelnye_materialy
+    name: Строительные материалы. РФ. Чат
+    source_type: procurement
+    auto_join: true
+    require_location: false
+  - id: stroyrostov_don
+    username: stroyrostov_Don
+    name: Стройка Ремонт Ростова
+    location: Ростов-на-Дону
+    source_type: builders
+    auto_join: true
+    require_location: false
+  - id: getmetall
+    username: getmetall
+    name: Металлопрокат, покупка-продажа
+    source_type: procurement
+    auto_join: true
+    require_location: false
+  - id: stroitely_top
+    username: stroitely_top
+    name: Строители Москвы
+    source_type: builders
+    auto_join: true
+    require_location: false
+  - id: agentstroi_chat
+    username: agentstroi_chat
+    name: "@agentstroi_chat"
+    source_type: builders
+    auto_join: true
+    require_location: false
+  - id: gruzkobrin
+    username: gruzkobrin
+    name: "@gruzkobrin"
+    source_type: unclassified
+    auto_join: true
+    require_location: false
+  - id: cuprushelpers
+    username: CupRusHelpers
+    name: "@CupRusHelpers"
+    source_type: unclassified
+    auto_join: true
+    require_location: false
+  - id: rabota_gruzchikom_podrabotka
+    username: Rabota_gruzchikom_podrabotka
+    name: "@Rabota_gruzchikom_podrabotka"
+    source_type: jobs
+    auto_join: true
+    require_location: false
+  - id: renovation24
+    username: renovation24
+    name: "@renovation24"
+    source_type: builders
+    auto_join: true
+    require_location: false
+  - id: rabota_podrabotki_minsk
+    username: Rabota_Podrabotki_Minsk
+    name: "@Rabota_Podrabotki_Minsk"
+    source_type: jobs
+    auto_join: true
+    require_location: false
+  - id: rabota_stroitelem_podrabotka
+    username: rabota_stroitelem_podrabotka
+    name: "@rabota_stroitelem_podrabotka"
+    source_type: jobs
+    auto_join: true
+    require_location: false
+  - id: sta26vropol
+    username: sta26vropol
+    name: Чат-форум Ставрополья
+    source_type: unclassified
+    auto_join: true
+    require_location: false
+  - id: stroimaterialu
+    username: stroimaterialu
+    name: Стройматериалы
+    source_type: procurement
+    auto_join: true
+    require_location: false

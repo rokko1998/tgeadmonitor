@@ -1,0 +1,37 @@
+# Policy agreed with the operator on 2026-10-20. These are patterns, not exact examples.
+# Mask unrelated meanings before matching products; mixed purchases keep their target items.
+non_target_products:
+  - id: composite_rebar
+    pattern: '\b(?:композитн\w*|стеклопластик\w*|базальтопластик\w*)\s+арматур\w*|\bарматур\w*\s+(?:композитн\w*|стеклопластик\w*|базальтопластик\w*)'
+  - id: nonmetal_pipe
+    pattern: '\b(?:(?:пнд|пвх|полипропилен\w*|пластиков\w*|канализационн\w*)\s+труб\w*|труб\w*\s+(?:пнд|пвх|полипропилен\w*|пластиков\w*|канализационн\w*))'
+  - id: nonmetal_mesh
+    pattern: '\b(?:(?:москитн\w*|волейбольн\w*|футбольн\w*|рыболовн\w*|затеняющ\w*)\s+сетк\w*|сетк\w*(?:\s+в\s+рулон\w*)?\s+(?:на\s+окн\w*|для\s+(?:волейбол\w*|футбол\w*|затенени\w*|рыбалк\w*)))'
+  - id: leisure_corner
+    pattern: '\bуголок\s+для\s+отдых\w*'
+  - id: paper_sheet
+    pattern: '\bлист\w*\s+бумаг\w*'
+
+# These requests concern construction projects, rather than a material purchase: C only.
+potential_requests:
+  - id: contractor_for_metal_project
+    pattern: '\bкто\s+(?:может\s+)?(?:сделает|делает|строит|построит|установит|устанавливает)\b(?=.*\b(?:забор\w*|навес\w*|ворот\w*|калитк\w*|теплиц\w*|каркас\w*|огражден\w*|ангар\w*|пристройк\w*))'
+  - id: turnkey_greenhouse
+    pattern: '\b(?:построить|сделать|заказать)\s+теплиц\w*\s+под\s+ключ\b'
+  - id: canopy_contractor
+    pattern: '\bнужен\s+навес\b|\bнавес\b.*\bкто\s+возьмется\b'
+  - id: frame_contractor
+    pattern: '\bнужен\s+(?:каркас|ангар)\b'
+  - id: welding_contractor
+    pattern: '\bищу\s+сварщик\w*\s+(?:сделать|сварить|установить)\b'
+  - id: planned_fence
+    pattern: '\b(?:хотим|планируем|хочу|планирую)\s+(?:поставить|установить|сделать)\s+забор\w*'
+
+# Details distinguish a useful request from "Нужна арматура" (C).
+request_details:
+  - id: commercial_question
+    pattern: '\b(?:где\s+(?:купить|взять)|у\s+кого|кто\s+(?:продает|торгует|привезет)|сколько\s+стоит|почем|цен\w*|прайс\w*|поставщик\w*|есть\s+ли|в\s+наличии|срочно|привезите|доставьте)\b'
+
+ambiguous_materials:
+  - id: unspecified_sheet
+    pattern: '\bлист(?:а|ы|ов)?\b'

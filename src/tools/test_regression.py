@@ -7,7 +7,7 @@ import pytest
 from src.config.loader import Chat, load_config
 from src.processing.classifier import Classifier
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 ROWS = [json.loads(l) for l in (ROOT / "data" / "dataset.jsonl").read_text(encoding="utf-8").splitlines()
         if l.strip() and not l.startswith("#")]
 
@@ -21,4 +21,4 @@ def clf() -> Classifier:
 def test_dataset_row(clf, row):
     chat = Chat(id="d", name="d", location=row["chat_location"]) if row.get("chat_location") else None
     c = clf.classify(row["text"], chat)
-    assert c.is_lead == bool(row["expected"]), c.verdict.explain()
+    assert c.verdict.decision == row["expected_decision"], c.verdict.explain()

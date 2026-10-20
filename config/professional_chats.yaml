@@ -1,5 +1,5 @@
 # Professional/high-intent sources. Public usernames only.
-# Federal sources require an explicit Rostov-region location in the message.
+# Geography is metadata only; all regions are eligible for notifications.
 chats:
   # Existing Rostov construction chats — re-declared here to assign source_type.
   - id: chat_rostova_builders
@@ -90,7 +90,7 @@ chats:
     source_type: subcontract
     kind: субподряды
     priority: 3
-    require_location: true
+    require_location: false
     enabled: true
 
   - id: vsempodryad_chat
@@ -99,7 +99,7 @@ chats:
     source_type: subcontract
     kind: субподряды
     priority: 3
-    require_location: true
+    require_location: false
     enabled: true
 
   - id: metallokonstrukcii_zakazy
@@ -108,7 +108,7 @@ chats:
     source_type: metalwork
     kind: металлоконструкции
     priority: 3
-    require_location: true
+    require_location: false
     enabled: true
 
   - id: stroimateriali_chat
@@ -117,7 +117,7 @@ chats:
     source_type: procurement
     kind: стройматериалы
     priority: 2
-    require_location: true
+    require_location: false
     enabled: true
 
   - id: strojmaterialy_info
@@ -126,7 +126,7 @@ chats:
     source_type: procurement
     kind: стройматериалы
     priority: 2
-    require_location: true
+    require_location: false
     enabled: true
 
   - id: ovikrus
@@ -135,7 +135,7 @@ chats:
     source_type: hvac
     kind: ОВиК
     priority: 2
-    require_location: true
+    require_location: false
     enabled: true
 
   - id: ventilyatsia
@@ -144,7 +144,7 @@ chats:
     source_type: hvac
     kind: ОВиК
     priority: 2
-    require_location: true
+    require_location: false
     enabled: true
 
   - id: plumbing_chat
@@ -153,5 +153,5 @@ chats:
     source_type: plumbing
     kind: сантехника
     priority: 2
-    require_location: true
+    require_location: false
     enabled: true

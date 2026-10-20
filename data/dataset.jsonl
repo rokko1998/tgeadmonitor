@@ -1,0 +1,120 @@
+{"text": "Куплю арматуру 12, 2 тонны, Аксай", "expected_decision": "lead", "expected": true}
+{"text": "Нужна арматура 10 мм, 500 метров, Ростов", "expected_decision": "lead", "expected": true}
+{"text": "Где купить арматуру 14 в Батайске?", "expected_decision": "lead", "expected": true}
+{"text": "Кто может привезти арматуру А500С 12 мм, 3 тонны?", "expected_decision": "lead", "expected": true}
+{"text": "Куплю арматуру А500С, 5 тонн, нужна доставка на Левенцовку", "expected_decision": "lead", "expected": true}
+{"text": "Нужен поставщик арматуры, постоянные закупки, Ростов", "expected_decision": "lead", "expected": true}
+{"text": "Сколько стоит профнастил С8 на забор 30 м?", "expected_decision": "lead", "expected": true}
+{"text": "Почём профнастил С20 коричневый, RAL 8017, 40 листов?", "expected_decision": "lead", "expected": true}
+{"text": "Куплю профнастил НС35 на кровлю, 120 м2, Азов", "expected_decision": "lead", "expected": true}
+{"text": "Подскажите, где купить профлист на забор, Новочеркасск", "expected_decision": "lead", "expected": true}
+{"text": "Есть в наличии евроштакетник 100 штук?", "expected_decision": "lead", "expected": true}
+{"text": "Нужна рабица 1,5х10, 5 рулонов, Аксай", "expected_decision": "lead", "expected": true}
+{"text": "Есть ли в наличии сетка рабица 1,8х10?", "expected_decision": "lead", "expected": true}
+{"text": "Куплю сварную сетку 50х50 для забора, 20 штук", "expected_decision": "lead", "expected": true}
+{"text": "Где купить кладочную сетку 50х50х3, 30 карт?", "expected_decision": "lead", "expected": true}
+{"text": "Нужна сетка 3D для забора, 25 секций, Таганрог", "expected_decision": "lead", "expected": true}
+{"text": "Где купить трубу 40х20 с доставкой в Батайск?", "expected_decision": "lead", "expected": true}
+{"text": "Нужна профтруба 60х60х3, 12 хлыстов, срочно", "expected_decision": "lead", "expected": true}
+{"text": "Сколько стоит профильная труба 80х80 6 метров?", "expected_decision": "lead", "expected": true}
+{"text": "Куплю профтрубу 20х20 на теплицу, 10 хлыстов", "expected_decision": "lead", "expected": true}
+{"text": "Нужна стальная труба 57х3,5, 100 метров", "expected_decision": "lead", "expected": true}
+{"text": "Где купить трубу ВГП 25, 60 метров, Ростов?", "expected_decision": "lead", "expected": true}
+{"text": "Куплю швеллер 12, 3 тонны, Ростов", "expected_decision": "lead", "expected": true}
+{"text": "Нужен двутавр 20Б1, 12 метров, 4 штуки", "expected_decision": "lead", "expected": true}
+{"text": "Нужен уголок металлический 50х50х5, 20 метров", "expected_decision": "lead", "expected": true}
+{"text": "Сколько стоит швеллер 10 за тонну?", "expected_decision": "lead", "expected": true}
+{"text": "Куплю лист оцинкованный 0,5 мм, 30 листов", "expected_decision": "lead", "expected": true}
+{"text": "Нужен лист г/к 3 мм 1250х2500, 10 штук", "expected_decision": "lead", "expected": true}
+{"text": "Где купить рифлёный лист 4 мм?", "expected_decision": "lead", "expected": true}
+{"text": "Нужна полоса стальная 40х4, 50 метров", "expected_decision": "lead", "expected": true}
+{"text": "Куплю проволоку вязальную, 2 бухты", "expected_decision": "lead", "expected": true}
+{"text": "Нужна арматура оптом, какая цена за тонну?", "expected_decision": "lead", "expected": true}
+{"text": "Прошу прислать прайс на металлопрокат, закупка на объект, ООО", "expected_decision": "lead", "expected": true}
+{"text": "Нужны столбы металлические 60х60 для забора, 30 штук, Аксай", "expected_decision": "lead", "expected": true}
+{"text": "Нужен профнастил и труба на навес, где взять? Ростов", "expected_decision": "lead", "expected": true}
+{"text": "Арматура 12 почем сейчас?", "expected_decision": "lead", "expected": true}
+{"text": "Профнастил есть? Нужно 20 листов на забор", "expected_decision": "lead", "expected": true}
+{"text": "Подскажите по цене на швеллер 14", "expected_decision": "lead", "expected": true}
+{"text": "Кто торгует профтрубой? Нужно срочно, завтра на объект", "expected_decision": "lead", "expected": true}
+{"text": "Ищу где взять рабицу недорого, Аксай", "expected_decision": "lead", "expected": true}
+{"text": "Нужна ст3 круг 20, 200 кг", "expected_decision": "lead", "expected": true}
+{"text": "Подскажите у кого купить металлический уголок 63х63?", "expected_decision": "lead", "expected": true}
+{"text": "Нужен поставщик металла, берем регулярно, безнал, НДС", "expected_decision": "lead", "expected": true}
+{"text": "Привезите арматуру 8 мм на дачу, Новочеркасск", "expected_decision": "lead", "expected": true}
+{"text": "Кто продаёт профлист С21, нужно 100 м2?", "expected_decision": "lead", "expected": true}
+{"text": "Кто сделает забор в Батайске?", "expected_decision": "potential", "expected": false}
+{"text": "Нужен навес для машины, кто возьмется? Ростов", "expected_decision": "potential", "expected": false}
+{"text": "Ищу сварщика сделать ворота и калитку, Аксай", "expected_decision": "potential", "expected": false}
+{"text": "Кто может построить теплицу под ключ, Азов?", "expected_decision": "potential", "expected": false}
+{"text": "Нужен каркас под беседку, посоветуйте мастера", "expected_decision": "potential", "expected": false}
+{"text": "Подскажите, кто делает ограждение участка из профнастила?", "expected_decision": "potential", "expected": false}
+{"text": "Хотим поставить забор на участке 20 соток, с чего начать?", "expected_decision": "potential", "expected": false}
+{"text": "Нужен ангар 12х24, кто строит в Ростовской области?", "expected_decision": "potential", "expected": false}
+{"text": "Кто установит кованые ворота, Новочеркасск?", "expected_decision": "potential", "expected": false}
+{"text": "Планируем пристройку к дому, нужен каркас, кто делает?", "expected_decision": "potential", "expected": false}
+{"text": "Продам арматуру, в наличии, звоните", "expected_decision": "ignore", "expected": false}
+{"text": "Профнастил от производителя, цены от 350 руб/м2, доставка по области", "expected_decision": "ignore", "expected": false}
+{"text": "Металлобаза. Арматура, труба, швеллер, уголок. Склад в Ростове, тел. 8 928 000 00 00", "expected_decision": "ignore", "expected": false}
+{"text": "Акция! Рабица со скидкой 15%, успей купить", "expected_decision": "ignore", "expected": false}
+{"text": "Изготовим ворота, калитки, заборы на заказ, пишите в личку", "expected_decision": "ignore", "expected": false}
+{"text": "Реализуем металлопрокат оптом и в розницу, большой ассортимент", "expected_decision": "ignore", "expected": false}
+{"text": "Поставляем профтрубу, лист, уголок. Работаем без выходных @metal_rostov", "expected_decision": "ignore", "expected": false}
+{"text": "Продаю остатки арматуры 12, 1 тонна, самовывоз", "expected_decision": "ignore", "expected": false}
+{"text": "Мы производители профнастила, собственное производство, сертификаты", "expected_decision": "ignore", "expected": false}
+{"text": "Сетка сварная в наличии, оптом и в розницу, доставка, т.me/setka161", "expected_decision": "ignore", "expected": false}
+{"text": "Продаётся швеллер б/у, 5 метров, недорого", "expected_decision": "ignore", "expected": false}
+{"text": "Приглашаем к сотрудничеству дилеров, металлопрокат от завода", "expected_decision": "ignore", "expected": false}
+{"text": "Куплю гараж в Ростове", "expected_decision": "ignore", "expected": false}
+{"text": "Куплю дом в Аксае", "expected_decision": "ignore", "expected": false}
+{"text": "Ищу квартиру в Батайске, срочно", "expected_decision": "ignore", "expected": false}
+{"text": "Куплю участок под строительство, Азов", "expected_decision": "ignore", "expected": false}
+{"text": "Требуется сварщик, труба, лист, оплата достойная", "expected_decision": "ignore", "expected": false}
+{"text": "Ищу работу сварщиком, опыт 10 лет", "expected_decision": "ignore", "expected": false}
+{"text": "Принимаем металлолом дорого, вывоз бесплатно", "expected_decision": "ignore", "expected": false}
+{"text": "Куплю лом черного металла, самовывоз", "expected_decision": "ignore", "expected": false}
+{"text": "Нужна москитная сетка на окно", "expected_decision": "ignore", "expected": false}
+{"text": "Подскажите, где купить ПНД трубу 32", "expected_decision": "ignore", "expected": false}
+{"text": "Нужна полипропиленовая труба для отопления", "expected_decision": "ignore", "expected": false}
+{"text": "Куплю цемент, 5 тонн, Ростов", "expected_decision": "ignore", "expected": false}
+{"text": "Нужен песок и щебень, 2 КамАЗа, Аксай", "expected_decision": "ignore", "expected": false}
+{"text": "Кто сделает прочистку канализационной трубы?", "expected_decision": "ignore", "expected": false}
+{"text": "Нужен лист бумаги А4, где купить?", "expected_decision": "ignore", "expected": false}
+{"text": "Нужна арматура", "expected_decision": "potential", "expected": false}
+{"text": "Куплю металл", "expected_decision": "potential", "expected": false}
+{"text": "Нужна труба", "expected_decision": "potential", "expected": false}
+{"text": "Куплю уголок для отдыха на даче", "expected_decision": "ignore", "expected": false}
+{"text": "Сетка для волейбола, где купить?", "expected_decision": "ignore", "expected": false}
+{"text": "Куплю арматуру и цемент, 2 тонны арматуры", "expected_decision": "lead", "expected": true}
+{"text": "Где купить композитную арматуру 8 мм?", "expected_decision": "ignore", "expected": false}
+{"text": "Нужен лист, 30 штук", "expected_decision": "potential", "expected": false}
+{"text": "Куплю кладочную сетку 50х50х3 в картах, 40 карт, Ростов", "expected_decision": "lead", "expected": true}
+{"text": "Сколько стоит сетка сварная в картах 2х1 м, ячейка 100х100?", "expected_decision": "lead", "expected": true}
+{"text": "Нужна дорожная сетка 100х100х4, карты 2х3 м, 15 штук", "expected_decision": "lead", "expected": true}
+{"text": "Где купить сетку арматурную в картах 0,5х2 м, 100 шт, Аксай?", "expected_decision": "lead", "expected": true}
+{"text": "Есть в наличии сетка кладочная 100х100х3, карты 0,5х2? Нужно 50 штук", "expected_decision": "lead", "expected": true}
+{"text": "Почём сетка сварная 50х50х3 в картах, 1,5х2 м?", "expected_decision": "lead", "expected": true}
+{"text": "Нужна сетка в картах на стяжку, 200 м2, срочно, Батайск", "expected_decision": "lead", "expected": true}
+{"text": "Кто продаёт сетку для армирования в картах? Нужно 60 карт, Азов", "expected_decision": "lead", "expected": true}
+{"text": "Нужна рабица в рулонах 1,5х10, 8 рулонов, Аксай", "expected_decision": "lead", "expected": true}
+{"text": "Куплю сетку рабицу 1,8х10, оцинкованная, 5 рулонов", "expected_decision": "lead", "expected": true}
+{"text": "Сколько стоит рабица 50х50х2 в рулоне 1,5х10?", "expected_decision": "lead", "expected": true}
+{"text": "Где купить сетку сварную в рулонах 25х25, 1х10 м, Таганрог?", "expected_decision": "lead", "expected": true}
+{"text": "Есть ли в наличии рабица в рулонах 2х10, 20 штук?", "expected_decision": "lead", "expected": true}
+{"text": "Нужна оцинкованная сетка в рулонах для вольера, 3 рулона, Новочеркасск", "expected_decision": "lead", "expected": true}
+{"text": "Почём рабица за рулон? Нужно 10 рулонов на забор, Ростов", "expected_decision": "lead", "expected": true}
+{"text": "Привезите рабицу в рулонах 1,5х10 на участок, Батайск", "expected_decision": "lead", "expected": true}
+{"text": "Куплю профнастил С8 зелёный RAL 6005, 30 листов, Ростов", "expected_decision": "lead", "expected": true}
+{"text": "Сколько стоит профнастил С20 2 метра, оцинкованный?", "expected_decision": "lead", "expected": true}
+{"text": "Нужен профнастил НС35 на кровлю, 150 м2, Азов", "expected_decision": "lead", "expected": true}
+{"text": "Где купить профнастил на забор, высота 2 м, 40 м, Аксай?", "expected_decision": "lead", "expected": true}
+{"text": "Почём профнастил С21 коричневый, 25 листов с доставкой?", "expected_decision": "lead", "expected": true}
+{"text": "Есть профнастил С8 RAL 8017 в наличии? Нужно 20 листов", "expected_decision": "lead", "expected": true}
+{"text": "Нужен профлист Н60 для склада, 300 м2, срочно", "expected_decision": "lead", "expected": true}
+{"text": "Кто может привезти профнастил 3 м, 50 листов, Новочеркасск?", "expected_decision": "lead", "expected": true}
+{"text": "Куплю профнастил оцинкованный 0,45 мм, 100 м2, Таганрог", "expected_decision": "lead", "expected": true}
+{"text": "Нужен профнастил на забор и профтруба 40х20, где взять? Батайск", "expected_decision": "lead", "expected": true}
+{"text": "Продам профнастил С8, цены от 330 руб/м2, доставка, звоните", "expected_decision": "ignore", "expected": false}
+{"text": "Рабица в рулонах в наличии, оптом и в розницу, @setka_rostov", "expected_decision": "ignore", "expected": false}
+{"text": "Нужна сетка в рулонах для затенения, 4 м", "expected_decision": "ignore", "expected": false}
+{"text": "Нужен профнастил (без количества и города)", "expected_decision": "potential", "expected": false}

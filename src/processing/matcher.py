@@ -59,16 +59,24 @@ class Matcher:
                     r.features.add("intent_strong")
                 break
 
+        product_text = norm
+        for rule in cfg.non_target_rules:
+            if rule.regex.search(product_text):
+                r.add("non_target_product", rule.id, rule.regex.search(product_text).group(0))
+                product_text = rule.regex.sub(" ", product_text)
+
         for p in cfg.products:
-            found = next((rx.search(norm) for rx in p.patterns if rx.search(norm)), None)
+            found = next((m for rx in p.patterns if (m := rx.search(product_text))), None)
             if not found:
                 continue
             r.add("product", p.id, found.group(0), value=p.name)
+            if p.group in {"металлопрокат", "пиломатериалы"}:
+                r.features.add("material_product")
             if p.name not in r.products:
                 r.products.append(p.name)
                 r.product_ids.append(p.id)
             for rx in p.size_patterns:
-                sm = rx.search(norm)
+                sm = rx.search(product_text)
                 if sm:
                     val = self._joined_groups(sm)
                     r.add("size", f"{p.id}_size", sm.group(0), value=val)
@@ -120,6 +128,19 @@ class Matcher:
             m = rule.regex.search(norm)
             if m:
                 r.add("sell", rule.id, m.group(0))
+
+        for rule in cfg.potential_request_rules:
+            m = rule.regex.search(norm)
+            if m:
+                r.add("service_request", rule.id, m.group(0))
+        for rule in cfg.ambiguous_material_rules:
+            m = rule.regex.search(norm)
+            if m:
+                r.add("ambiguous_material", rule.id, m.group(0))
+        has_details = bool({"size", "amount", "location", "context"} & r.features)
+        has_details = has_details or any(rule.regex.search(norm) for rule in cfg.request_detail_rules)
+        if "intent" in r.features and "product" in r.features and not has_details:
+            r.add("short_request", "insufficient_details", "нет характеристик, объёма, задачи или уточняющего запроса")
 
         if surface.is_question:
             r.add("question", "question", "?")

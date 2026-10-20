@@ -24,7 +24,8 @@ hard_rules:
   not_lead:
     - id: seller_with_product
       all: [sell, product]
-      none: [intent_strong]
+    - id: seller_without_product
+      all: [sell]
   lead:
     - id: strong_buy_intent_with_product
       all: [intent_strong, product]

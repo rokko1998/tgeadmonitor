@@ -1,11 +1,13 @@
 """MTProto listener with runtime source activation."""
 from __future__ import annotations
 import logging
+import time
 from datetime import timezone
 from typing import Awaitable, Callable
 from telethon import TelegramClient, events, utils
-from telethon.errors import RPCError
+from telethon.errors import FloodWaitError, RPCError
 from telethon.sessions import StringSession
+from telethon.tl.types import Channel, Chat as TelegramChat
 from src.config.loader import Chat
 
 log = logging.getLogger("listener")
@@ -13,7 +15,7 @@ log = logging.getLogger("listener")
 def build_client(api_id: int, api_hash: str, session: str, data_dir) -> TelegramClient:
     sess = StringSession(session) if session else str(data_dir / "account")
     return TelegramClient(sess, api_id, api_hash, connection_retries=None, retry_delay=5,
-                          auto_reconnect=True, request_retries=5)
+                          auto_reconnect=True, request_retries=5, flood_sleep_threshold=0)
 
 def message_url(chat_username: str | None, chat_id: int, message_id: int) -> str | None:
     if chat_username:
@@ -27,13 +29,21 @@ class Listener:
         self.client, self.chats, self.on_message = client, chats, on_message
         self.resolved: dict[int, Chat] = {}
         self._registered = False
+        self.retry_after = 0.0
 
     async def resolve_chat(self, chat: Chat) -> Chat | None:
         ref = chat.username if chat.username else chat.chat_id
         try:
             entity = await self.client.get_entity(ref)
+        except FloodWaitError as exc:
+            self.retry_after = time.time() + exc.seconds + 1
+            log.warning("SOURCE_FLOOD_WAIT %s seconds=%s", chat.id, exc.seconds)
+            return None
         except (RPCError, ValueError) as e:
             log.error("SOURCE_UNAVAILABLE %s (%s): %s", chat.id, ref, e)
+            return None
+        if not isinstance(entity, (Channel, TelegramChat)) or getattr(entity, "left", False):
+            log.warning("SOURCE_NOT_JOINED %s", chat.id)
             return None
         chat.chat_id = utils.get_peer_id(entity)
         if not chat.username:
@@ -45,6 +55,12 @@ class Listener:
     async def resolve_chats(self) -> list[Chat]:
         ok = []
         for chat in self.chats:
+            if self.retry_after > time.time():
+                break
+            if chat.chat_id in self.resolved or (chat.username and any(
+                (c.username or "").lower() == chat.username.lower() for c in self.resolved.values()
+            )):
+                continue
             resolved = await self.resolve_chat(chat)
             if resolved:
                 ok.append(resolved)

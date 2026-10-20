@@ -12,6 +12,7 @@ KNOWN_FEATURES = {
     "intent", "intent_strong", "product", "size", "amount", "location",
     "location_fallback", "context", "project_signal", "professional_actor",
     "question", "sell", "ad", "many_products", "url",
+    "material_product", "non_target_product", "short_request", "service_request", "ambiguous_material",
 }
 
 class ConfigError(Exception):
@@ -47,6 +48,7 @@ class Chat:
     kind: str | None = None
     source_type: str = "legacy"
     require_location: bool = False
+    auto_join: bool = False
     enabled: bool = True
     priority: int = 1
     comment: str | None = None
@@ -100,6 +102,10 @@ class AppConfig:
     ad: AdSettings
     locations: list[Location]
     scoring: Scoring
+    non_target_rules: list[Rule]
+    potential_request_rules: list[Rule]
+    request_detail_rules: list[Rule]
+    ambiguous_material_rules: list[Rule]
 
     def enabled_chats(self) -> list[Chat]:
         return [c for c in self.chats if c.enabled]
@@ -177,12 +183,13 @@ def load_config(config_dir: Path) -> AppConfig:
 
     base_rows = _load_yaml(config_dir / "chats.yaml").get("chats") or []
     professional_rows = _load_yaml(config_dir / "professional_chats.yaml").get("chats") or []
+    document_rows = _load_yaml(config_dir / "document_chats.yaml", required=False).get("chats") or []
     policy = _load_yaml(config_dir / "source_policy.yaml").copy()
     disabled_kinds = {str(x).lower() for x in policy.get("disabled_kinds") or []}
     disabled_id_contains = [str(x).lower() for x in policy.get("disabled_id_contains") or []]
 
     chats: list[Chat] = []
-    for i, c in enumerate(_merge_chat_rows(base_rows, professional_rows)):
+    for i, c in enumerate(_merge_chat_rows(_merge_chat_rows(base_rows, professional_rows), document_rows)):
         if not c.get("id"):
             raise ConfigError(f"chats[{i}]: 'id' is required")
         if c.get("chat_id") is None and not c.get("username"):
@@ -201,15 +208,20 @@ def load_config(config_dir: Path) -> AppConfig:
             username=c.get("username") or None, location=c.get("location"),
             district=c.get("district"), kind=c.get("kind"), source_type=source_type,
             require_location=bool(c.get("require_location", False)),
+            auto_join=bool(c.get("auto_join", False)),
             enabled=enabled, priority=int(c.get("priority", 1)), comment=c.get("comment"),
         ))
 
     prod_raw = _load_yaml(config_dir / "products.yaml")
     products = []
+    product_ids: set[str] = set()
     for i, p in enumerate(prod_raw.get("products") or []):
         pid = p.get("id")
         if not pid:
             raise ConfigError(f"products.yaml[{i}]: 'id' is required")
+        if pid in product_ids:
+            raise ConfigError(f"products.yaml: duplicate product id {pid!r}")
+        product_ids.add(pid)
         pats = _compile_list(p.get("patterns"), f"products.{pid}.patterns")
         if not pats:
             raise ConfigError(f"products.{pid}: 'patterns' must not be empty")
@@ -228,6 +240,7 @@ def load_config(config_dir: Path) -> AppConfig:
         raise ConfigError("intents.yaml: purchase_intents is empty")
 
     signals = _load_yaml(config_dir / "project_signals.yaml")
+    qualification = _load_yaml(config_dir / "qualification.yaml")
     project_signal_rules = _rules(signals.get("project_signals"), "project_signals")
     professional_actor_rules = _rules(signals.get("professional_actors"), "professional_actors")
 
@@ -240,7 +253,10 @@ def load_config(config_dir: Path) -> AppConfig:
                        if k in AdSettings.__dataclass_fields__})
 
     locations = []
-    for i, loc in enumerate(_load_yaml(config_dir / "locations.yaml").get("locations") or []):
+    location_rows = _load_yaml(config_dir / "locations.yaml").get("locations")
+    if not isinstance(location_rows, list) or not location_rows:
+        raise ConfigError("locations.yaml: 'locations' must be a non-empty list")
+    for i, loc in enumerate(location_rows):
         if not loc.get("name"):
             raise ConfigError(f"locations.yaml[{i}]: 'name' is required")
         pats = _compile_list(loc.get("patterns"), f"locations.{loc['name']}")
@@ -273,4 +289,8 @@ def load_config(config_dir: Path) -> AppConfig:
         source_types=source_types, size_patterns=size_patterns, amount_patterns=amount_patterns,
         intents=intents, sell_rules=sell_rules, hard_exclusions=hard_exclusions,
         min_length=min_length, ad=ad, locations=locations, scoring=scoring,
+        non_target_rules=_rules(qualification.get("non_target_products"), "non_target_products"),
+        potential_request_rules=_rules(qualification.get("potential_requests"), "potential_requests"),
+        request_detail_rules=_rules(qualification.get("request_details"), "request_details"),
+        ambiguous_material_rules=_rules(qualification.get("ambiguous_materials"), "ambiguous_materials"),
     )

@@ -11,6 +11,17 @@
 # может сработать как hard-rule lead.
 
 purchase_intents:
+  - id: price_chat_style
+    pattern: '\bподскажите\s+по\s+цен[еа]\b'
+    strong: true
+
+  - id: deliver_imperative
+    pattern: '\b(?:привезите|доставьте)\b'
+    strong: true
+
+  - id: send_quote_polite
+    pattern: '\b(?:прошу|просим)\s+(?:прислать|отправить|подготовить)\s+(?:прайс|кп|коммерческ\w+\s+предложени\w*)\b'
+    strong: true
 
   # ---------------------------------------------------------------------------
   # 1. БАЗОВАЯ ПОТРЕБНОСТЬ

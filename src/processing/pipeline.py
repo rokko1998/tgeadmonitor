@@ -48,17 +48,12 @@ class Pipeline:
         if c.hard_excluded:
             status = "excluded"
 
-        # Federal/professional sources must mention our service geography explicitly.
-        if chat.require_location and not c.matches.location:
-            if status in ("lead", "project_signal"):
-                status = "potential"
-
         if status in ("ignored", "excluded") and not self.store_all:
             self.metrics.inc("messages_filtered")
             return
 
         dup = None
-        if status in ("lead", "project_signal"):
+        if status == "lead":
             dup = self.dedup.find_duplicate(c.hash, c.normalized, msg.user_id, msg.date)
             if dup:
                 status = "duplicate"
@@ -79,7 +74,7 @@ class Pipeline:
         if status == "duplicate":
             self.metrics.inc("duplicates")
             return
-        if status not in ("lead", "project_signal"):
+        if status != "lead":
             self.metrics.inc("messages_filtered")
             return
 

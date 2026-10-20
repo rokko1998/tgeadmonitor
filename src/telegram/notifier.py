@@ -1,19 +1,33 @@
-"""Bot API notifier, feedback, analytics and /addchat wizard."""
+"""Bot API notifications, feedback, analytics and batch source onboarding."""
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from typing import Any
+
 import aiohttp
+
 from src.metrics import Metrics
 from src.storage.database import Database
+from src.telegram.chat_links import extract_links, parse_link
 
 log = logging.getLogger("notifier")
 FEEDBACK = {"lead": ("confirmed", "✅ Отмечено как лид"),
             "notlead": ("rejected", "❌ Отмечено: не лид")}
+HELP = (
+    "Пришли одну или несколько ссылок на Telegram-чаты одним сообщением.\n"
+    "Можно без команды или так: /addchat https://t.me/name https://t.me/+invite\n"
+    "Поддерживаются @username и ссылки-приглашения. Мониторинг включится без перезапуска.\n"
+    "Закрытый чат с одобрением появится после принятия заявки.\n\n"
+    "/chats — активные источники и состояние очереди\n"
+    "/stats, /stats7, /stats30 — статистика"
+)
+
 
 class BotApiError(Exception):
     pass
+
 
 class Notifier:
     def __init__(self, token: str, owner_chat_id: int, db: Database, metrics: Metrics,
@@ -25,10 +39,6 @@ class Notifier:
         self._offset = 0
         self._wakeup = asyncio.Event()
         self.chat_manager = None
-        self._add_stage = None
-        self._candidate = None
-        self._source_type = None
-        self._location = None
 
     def set_chat_manager(self, manager) -> None:
         self.chat_manager = manager
@@ -76,9 +86,9 @@ class Notifier:
                 parse_mode="HTML", disable_web_page_preview=True,
                 reply_markup=payload.get("reply_markup"),
             )
-        except (aiohttp.ClientError, asyncio.TimeoutError, BotApiError) as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError, BotApiError) as exc:
             final = row["attempts"] + 1 >= self.max_attempts
-            self.db.mark_notification_failed(int(row["id"]), str(e), final=final)
+            self.db.mark_notification_failed(int(row["id"]), str(exc), final=final)
             self.metrics.inc("notification_failed")
             return
         self.db.mark_notification_sent(int(row["id"]))
@@ -93,98 +103,48 @@ class Notifier:
                     allowed_updates=["callback_query", "message"],
                 )
                 for upd in updates:
-                    self._offset = upd["update_id"] + 1
+                    # Acknowledge only after its source links have been persisted.
                     await self._handle_update(upd)
-            except (aiohttp.ClientError, asyncio.TimeoutError, BotApiError) as e:
-                log.warning("Polling error: %s", e)
+                    self._offset = upd["update_id"] + 1
+            except (aiohttp.ClientError, asyncio.TimeoutError, BotApiError) as exc:
+                log.warning("Polling error: %s", exc)
                 await asyncio.sleep(self.retry_interval)
             except Exception:
                 log.exception("Polling loop error")
                 await asyncio.sleep(self.retry_interval)
 
-    async def _send_owner(self, text: str) -> None:
-        await self.api("sendMessage", chat_id=self.owner, text=text,
-                       disable_web_page_preview=True)
+    async def send_owner(self, text: str) -> None:
+        # Plain text: titles, links and API errors never become HTML markup.
+        for start in range(0, len(text), 3900):
+            await self.api("sendMessage", chat_id=self.owner, text=text[start:start + 3900],
+                           disable_web_page_preview=True)
 
     async def _send_stats(self, days: int | None) -> None:
         stats = self.db.stats(days)
         stats.update(self.metrics.snapshot())
-        body = json.dumps(stats, ensure_ascii=False, indent=1)
-        # Telegram max is 4096; show a compact leading slice.
-        await self.api("sendMessage", chat_id=self.owner,
-                       text="<pre>" + body[:3900] + "</pre>", parse_mode="HTML")
+        stats["source_requests"] = self.db.source_request_counts()
+        await self.send_owner(json.dumps(stats, ensure_ascii=False, indent=1))
 
-    def _reset_addchat(self) -> None:
-        self._add_stage = self._candidate = self._source_type = self._location = None
-
-    async def _start_addchat(self, initial: str | None = None) -> None:
+    async def _add_links(self, text: str) -> None:
         if not self.chat_manager:
-            await self._send_owner("Мастер добавления источников пока недоступен.")
+            await self.send_owner("Добавление источников пока недоступно.")
             return
-        self._reset_addchat()
-        self._add_stage = "link"
-        if initial:
-            await self._consume_addchat(initial)
-        else:
-            await self._send_owner(
-                "Пришли ссылку на Telegram-чат: https://t.me/name или https://t.me/+invite\n"
-                "/cancel — отменить."
-            )
-
-    async def _consume_addchat(self, text: str) -> None:
-        if text == "/cancel":
-            self._reset_addchat()
-            await self._send_owner("Добавление отменено.")
+        links = extract_links(text)
+        if not links:
+            await self.send_owner(HELP)
             return
-
-        if self._add_stage == "link":
+        seen, lines = set(), []
+        for raw in links:
             try:
-                self._candidate = await self.chat_manager.prepare(text)
-            except Exception as e:
-                await self._send_owner(f"Не получилось: {e}")
-                return
-            self._add_stage = "source_type"
-            await self._send_owner(
-                f"Нашёл: {self._candidate.chat.name}\n"
-                "Выбери тип одним сообщением:\n" + ", ".join(self.chat_manager.source_types)
-            )
-            return
-
-        if self._add_stage == "source_type":
-            value = text.strip().lower()
-            if value not in self.chat_manager.source_types:
-                await self._send_owner("Неизвестный тип. Варианты:\n" +
-                                       ", ".join(self.chat_manager.source_types))
-                return
-            self._source_type = value
-            self._add_stage = "location"
-            await self._send_owner("Укажи географию (например Ростов-на-Дону) или /skip.")
-            return
-
-        if self._add_stage == "location":
-            self._location = None if text.strip() == "/skip" else text.strip()
-            self._add_stage = "geo_gate"
-            await self._send_owner(
-                "Требовать явное упоминание Ростовской географии в сообщении?\n"
-                "Ответь yes для федерального чата или no для локального."
-            )
-            return
-
-        if self._add_stage == "geo_gate":
-            require_location = text.strip().lower() in {"yes", "y", "да", "д"}
-            try:
-                chat = await self.chat_manager.activate(
-                    self._candidate, self._source_type, self._location, require_location
-                )
-            except Exception as e:
-                await self._send_owner(f"Ошибка активации: {e}")
-                return
-            self._reset_addchat()
-            await self._send_owner(
-                f"✅ Источник добавлен и уже мониторится.\n{chat.name}\n"
-                f"type={chat.source_type}\nlocation={chat.location or '—'}\n"
-                f"require_location={chat.require_location}"
-            )
+                link = parse_link(raw)
+                if link.key in seen:
+                    continue
+                seen.add(link.key)
+                status = self.chat_manager.submit(raw)
+                lines.append(f"{link.url} — {status}")
+            except ValueError as exc:
+                lines.append(f"{raw} — ❌ {exc}")
+        await self.send_owner("Результат приёма ссылок:\n" + "\n".join(lines))
 
     async def _handle_update(self, upd: dict) -> None:
         cb = upd.get("callback_query")
@@ -194,21 +154,27 @@ class Notifier:
         msg = upd.get("message")
         if not msg or msg.get("chat", {}).get("id") != self.owner:
             return
-        text = (msg.get("text") or "").strip()
-        if not text:
+        # Management is private to OWNER_CHAT_ID; forwarded messages cannot grant access.
+        if msg.get("from", {}).get("id") != self.owner:
             return
-
-        if text.startswith("/stats30"):
-            await self._send_stats(30)
-        elif text.startswith("/stats7"):
-            await self._send_stats(7)
-        elif text.startswith("/stats"):
-            await self._send_stats(None)
-        elif text.startswith("/addchat"):
-            _, _, initial = text.partition(" ")
-            await self._start_addchat(initial.strip() or None)
-        elif self._add_stage:
-            await self._consume_addchat(text)
+        text = (msg.get("text") or msg.get("caption") or "").strip()
+        links_text = text + "\n" + "\n".join(
+            e["url"] for e in [*(msg.get("entities") or []), *(msg.get("caption_entities") or [])]
+            if e.get("type") == "text_link" and e.get("url")
+        )
+        command = text.split(maxsplit=1)[0].split("@")[0].lower() if text else ""
+        if command in {"/start", "/help"}:
+            await self.send_owner(HELP)
+        elif command in {"/stats", "/stats7", "/stats30"}:
+            await self._send_stats({"/stats": None, "/stats7": 7, "/stats30": 30}[command])
+        elif command == "/chats" and self.chat_manager:
+            chats = self.chat_manager.listener.resolved.values()
+            lines = [f"Активных источников: {len(self.chat_manager.listener.resolved)}"]
+            lines.extend(f"• {c.name} — @{c.username}" if c.username else f"• {c.name} ({c.chat_id})" for c in chats)
+            lines.append("Очередь: " + json.dumps(self.db.source_request_counts(), ensure_ascii=False))
+            await self.send_owner("\n".join(lines))
+        elif command == "/addchat" or extract_links(links_text):
+            await self._add_links(links_text)
 
     async def _handle_callback(self, cb: dict) -> None:
         cb_id = cb["id"]
@@ -221,6 +187,7 @@ class Notifier:
             return
         status, label = FEEDBACK[action]
         ok = self.db.set_feedback(int(lead_id), status)
-        self.metrics.inc("true_positive" if status == "confirmed" else "false_positive")
+        if ok:
+            self.metrics.inc("true_positive" if status == "confirmed" else "false_positive")
         await self.api("answerCallbackQuery", callback_query_id=cb_id,
                        text=label if ok else "Лид не найден")

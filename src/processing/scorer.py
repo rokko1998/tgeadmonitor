@@ -51,6 +51,27 @@ class Scorer:
                 verdict.hard_rule = f"not_lead:{rule.id}"
                 return verdict
 
+        # The operator's corpus takes priority over numeric scores and generic products.
+        if "non_target_product" in r.features and "material_product" not in r.features:
+            verdict.hard_rule = "not_lead:non_target_product"
+            return verdict
+        if "service_request" in r.features:
+            verdict.hard_rule = "potential:construction_request"
+            verdict.decision = POTENTIAL
+            return verdict
+        if "ambiguous_material" in r.features and "intent" in r.features and "product" not in r.features:
+            verdict.hard_rule = "potential:ambiguous_material"
+            verdict.decision = POTENTIAL
+            return verdict
+        if "short_request" in r.features:
+            verdict.hard_rule = "potential:insufficient_details"
+            verdict.decision = POTENTIAL
+            return verdict
+        if "product" not in r.features:
+            if "project_signal" in r.features and total >= self.s.project_signal_threshold:
+                verdict.decision = POTENTIAL
+            return verdict
+
         for rule in self.s.lead_rules:
             if _rule_applies(rule, r.features):
                 verdict.hard_rule = f"lead:{rule.id}"
@@ -63,7 +84,7 @@ class Scorer:
         if total >= self.s.notify_threshold and direct_evidence:
             verdict.decision = LEAD
         elif "project_signal" in r.features and total >= self.s.project_signal_threshold:
-            verdict.decision = PROJECT_SIGNAL
+            verdict.decision = POTENTIAL
         elif total >= self.s.potential_threshold:
             verdict.decision = POTENTIAL
         return verdict

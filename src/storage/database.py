@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -72,6 +73,18 @@ CREATE TABLE IF NOT EXISTS notifications (
     last_error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     sent_at TEXT
+);
+CREATE TABLE IF NOT EXISTS source_requests (
+    link_key TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    chat_id INTEGER,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at REAL NOT NULL DEFAULT 0,
+    last_error TEXT,
+    notify INTEGER NOT NULL DEFAULT 1,
+    approval_requested INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -149,6 +162,52 @@ class Database:
             )
             for r in rows
         ]
+
+    # Requests survive container rebuilds; invite links stay in the data volume.
+    def source_request(self, key: str):
+        return self.conn.execute("SELECT * FROM source_requests WHERE link_key=?", (key,)).fetchone()
+
+    def enqueue_source(self, key: str, url: str, notify: bool = True) -> bool:
+        with self.conn:
+            old = self.source_request(key)
+            if old and old["status"] not in {"failed", "active"}:
+                if notify:
+                    self.conn.execute("UPDATE source_requests SET notify=1 WHERE link_key=?", (key,))
+                return False
+            self.conn.execute(
+                """INSERT INTO source_requests(link_key,url,notify) VALUES(?,?,?)
+                   ON CONFLICT(link_key) DO UPDATE SET status='queued', next_attempt_at=0,
+                       last_error=NULL, approval_requested=0, notify=excluded.notify""", (key, url, int(notify)),
+            )
+        return True
+
+    def next_source_request(self):
+        return self.conn.execute(
+            """SELECT * FROM source_requests WHERE status IN ('queued','retry','pending','flood_wait')
+               AND next_attempt_at<=? ORDER BY next_attempt_at,created_at,link_key LIMIT 1""",
+            (time.time(),),
+        ).fetchone()
+
+    def source_cooldown_until(self) -> float:
+        return self.conn.execute(
+            "SELECT COALESCE(MAX(next_attempt_at),0) FROM source_requests WHERE status='flood_wait'"
+        ).fetchone()[0]
+
+    def finish_source_request(self, key: str, status: str, *, chat_id: int | None = None,
+                              error: str | None = None, delay: float = 0) -> None:
+        with self.conn:
+            self.conn.execute(
+                """UPDATE source_requests SET status=?,chat_id=COALESCE(?,chat_id),
+                   last_error=?,next_attempt_at=?,attempts=attempts+1,
+                   approval_requested=CASE WHEN ?='pending' THEN 1 ELSE approval_requested END
+                   WHERE link_key=?""",
+                (status, chat_id, error, time.time() + delay, status, key),
+            )
+
+    def source_request_counts(self) -> dict[str, int]:
+        return {r["status"]: r["n"] for r in self.conn.execute(
+            "SELECT status,COUNT(*) AS n FROM source_requests GROUP BY status"
+        )}
 
     # ---------- messages ----------
     def message_exists(self, chat_id: int, telegram_message_id: int) -> bool:

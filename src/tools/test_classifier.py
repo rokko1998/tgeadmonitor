@@ -37,8 +37,8 @@ def test_hard_rule_seller(clf):
 
 def test_hard_rule_buyer(clf):
     c = clf.classify("куплю арматуру")
-    assert c.is_lead
-    assert c.verdict.hard_rule == "lead:strong_buy_intent_with_product"
+    assert c.verdict.decision == "potential"
+    assert c.verdict.hard_rule == "potential:insufficient_details"
 
 
 def test_location_fallback_from_chat(clf):
@@ -52,7 +52,7 @@ def test_location_fallback_from_chat(clf):
 def test_phone_alone_is_not_ad(clf):
     c = clf.classify("Нужна арматура. Позвоните +79991234567")
     assert "ad" not in c.matches.features
-    assert c.is_lead
+    assert c.verdict.decision == "potential"
 
 
 def test_explanation_is_present(clf):
