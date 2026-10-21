@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from src.config.loader import Chat
+from src.storage.semantic import SemanticStorage
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
@@ -91,7 +93,7 @@ CREATE TABLE IF NOT EXISTS source_requests (
 def _utc(dt: datetime | None = None) -> str:
     return (dt or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S")
 
-class Database:
+class Database(SemanticStorage):
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -100,6 +102,7 @@ class Database:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(SCHEMA)
         self._migrate()
+        self.init_semantic_storage()
 
     def close(self) -> None:
         self.conn.close()
@@ -120,6 +123,13 @@ class Database:
             self._add_column("sources", "added_via TEXT NOT NULL DEFAULT 'config'", "added_via")
             self._add_column("leads", "lead_type TEXT NOT NULL DEFAULT 'lead'", "lead_type")
             self._add_column("leads", "source_type TEXT NOT NULL DEFAULT 'legacy'", "source_type")
+            self._add_column("sources", "analysis_enabled INTEGER NOT NULL DEFAULT 1", "analysis_enabled")
+            self._add_column("sources", "pause_reason TEXT", "pause_reason")
+            self._add_column("sources", "paused_at TEXT", "paused_at")
+            self._add_column("sources", "pinned INTEGER NOT NULL DEFAULT 0", "pinned")
+            self._add_column("sources", "quality_since TEXT", "quality_since")
+            self._add_column("sources", "observed_seconds INTEGER NOT NULL DEFAULT 0", "observed_seconds")
+            self.conn.execute("UPDATE sources SET quality_since=datetime('now') WHERE quality_since IS NULL")
 
     # ---------- sources ----------
     def upsert_source(self, c: Chat, added_via: str = "config") -> None:
@@ -129,8 +139,8 @@ class Database:
             self.conn.execute(
                 """INSERT INTO sources(
                        chat_id, internal_id, username, name, location, source_type,
-                       require_location, enabled, priority, added_via)
-                   VALUES(?,?,?,?,?,?,?,?,?,?)
+                       require_location, enabled, priority, added_via,quality_since)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(chat_id) DO UPDATE SET
                        internal_id=excluded.internal_id,
                        username=excluded.username,
@@ -138,11 +148,13 @@ class Database:
                        location=COALESCE(excluded.location, sources.location),
                        source_type=excluded.source_type,
                        require_location=excluded.require_location,
-                       enabled=excluded.enabled,
                        priority=excluded.priority""",
                 (c.chat_id, c.id, c.username, c.name, c.location, c.source_type,
                  int(c.require_location), int(c.enabled), c.priority, added_via),
             )
+            self.conn.execute("""UPDATE source_seeds SET resolved_chat_id=?
+                WHERE internal_id=? OR lower(json_extract(chat_json,'$.username'))=lower(?)""",
+                (c.chat_id,c.id,c.username))
 
     def upsert_sources(self, chats: Iterable[Chat], added_via: str = "config") -> None:
         for c in chats:
@@ -150,9 +162,9 @@ class Database:
 
     def runtime_sources(self) -> list[Chat]:
         rows = self.conn.execute(
-            "SELECT * FROM sources WHERE enabled=1 AND added_via='telegram_bot' ORDER BY priority DESC, name"
+            "SELECT * FROM sources WHERE enabled=1 ORDER BY priority DESC, name"
         ).fetchall()
-        return [
+        chats = [
             Chat(
                 id=r["internal_id"], name=r["name"], chat_id=int(r["chat_id"]),
                 username=r["username"], location=r["location"],
@@ -162,6 +174,80 @@ class Database:
             )
             for r in rows
         ]
+        chats.extend(Chat(**json.loads(r["chat_json"])) for r in self.conn.execute(
+            "SELECT chat_json FROM source_seeds WHERE resolved_chat_id IS NULL"
+        ) if json.loads(r["chat_json"]).get("enabled",True))
+        return chats
+
+    def seed_sources_once(self) -> None:
+        if self.runtime_value("sources_seeded_v1"):
+            return
+        # Only a new/migrating DB reads the historical bootstrap manifest.
+        chats=[Chat(**r) for r in json.loads(Path(__file__).with_name("source_seed.json").read_text(encoding="utf-8"))]
+        for chat in chats:
+            found=self.conn.execute("SELECT * FROM sources WHERE chat_id=? OR (username IS NOT NULL AND lower(username)=lower(?))",
+                                    (chat.chat_id,chat.username)).fetchone()
+            if found:
+                # Existing rows are authoritative, including their enabled state.
+                if not chat.enabled and found["added_via"]=="config":
+                    with self.conn:
+                        self.conn.execute("UPDATE sources SET enabled=0 WHERE chat_id=?", (found["chat_id"],))
+                continue
+            if chat.chat_id is not None:
+                self.upsert_source(chat)
+            else:
+                with self.conn:
+                    self.conn.execute("INSERT OR IGNORE INTO source_seeds(internal_id,chat_json) VALUES(?,?)",
+                                      (chat.id,json.dumps(asdict(chat),ensure_ascii=False)))
+        self.set_runtime_value("sources_seeded_v1",_utc())
+
+    def source(self, chat_id: int):
+        return self.conn.execute("SELECT * FROM sources WHERE chat_id=?", (chat_id,)).fetchone()
+
+    def source_chat(self, chat_id: int) -> Chat | None:
+        r=self.source(chat_id)
+        return Chat(id=r["internal_id"] or str(chat_id),name=r["name"] or str(chat_id),
+                    chat_id=chat_id,username=r["username"],location=r["location"],
+                    source_type=r["source_type"],priority=r["priority"],enabled=bool(r["enabled"])) if r else None
+
+    def set_source_analysis(self, chat_id: int, enabled: bool, reason: str = "manual") -> bool:
+        with self.conn:
+            if enabled:
+                cur=self.conn.execute("""UPDATE sources SET enabled=1,analysis_enabled=1,pause_reason=NULL,
+                    paused_at=NULL,observed_seconds=0,quality_since=datetime('now') WHERE chat_id=?""", (chat_id,))
+            else:
+                cur=self.conn.execute("""UPDATE sources SET analysis_enabled=0,pause_reason=?,
+                    paused_at=datetime('now') WHERE chat_id=?""", (reason,chat_id))
+            return cur.rowcount>0
+
+    def set_source_pinned(self, chat_id: int, pinned: bool) -> bool:
+        with self.conn:
+            return self.conn.execute("UPDATE sources SET pinned=? WHERE chat_id=?", (int(pinned),chat_id)).rowcount>0
+
+    def source_health_tick(self) -> None:
+        now=time.time()
+        previous=float(self.runtime_value("source_health_tick") or now)
+        # Do not count container downtime as days of successful observation.
+        elapsed=max(0,min(90,int(now-previous)))
+        with self.conn:
+            self.conn.execute("UPDATE sources SET observed_seconds=observed_seconds+? WHERE enabled=1 AND analysis_enabled=1", (elapsed,))
+            self.conn.execute("INSERT OR REPLACE INTO runtime_state VALUES('source_health_tick',?)", (str(now),))
+
+    def source_health(self, days: int = 30) -> list[dict]:
+        rows=self.conn.execute("""SELECT s.*,
+            COUNT(DISTINCT m.text_hash) AS unique_messages,
+            COUNT(DISTINCT CASE WHEN v.label IN ('direct','indirect')
+                AND COALESCE(l.status,parent.status,'new')<>'rejected' THEN m.text_hash END) AS useful,
+            COUNT(DISTINCT CASE WHEN (j.state IS NOT NULL AND j.state<>'done') OR v.label='review'
+                THEN m.id END) AS unresolved
+            FROM sources s LEFT JOIN messages m ON m.chat_id=s.chat_id
+                AND m.created_at>=s.quality_since AND m.created_at>=datetime('now',?)
+            LEFT JOIN message_semantics v ON v.message_id=m.id
+            LEFT JOIN semantic_jobs j ON j.message_id=m.id
+            LEFT JOIN leads l ON l.message_id=m.id
+            LEFT JOIN leads parent ON parent.id=v.duplicate_of
+            GROUP BY s.chat_id ORDER BY useful DESC,unique_messages DESC""", (f"-{int(days)} days",)).fetchall()
+        return [dict(r) for r in rows]
 
     # Requests survive container rebuilds; invite links stay in the data volume.
     def source_request(self, key: str):
@@ -237,52 +323,7 @@ class Database:
         with self.conn:
             self.conn.execute("UPDATE messages SET status=? WHERE id=?", (status, message_id))
 
-    def insert_matches(self, message_id: int, rows: Iterable[tuple[str, str, str, int]]) -> None:
-        with self.conn:
-            self.conn.executemany(
-                "INSERT INTO matches(message_id, rule, category, matched_text, weight) VALUES(?,?,?,?,?)",
-                [(message_id, rule, category, text, weight) for rule, category, text, weight in rows],
-            )
-
-    # ---------- dedup ----------
-    def find_message_by_hash(self, text_hash: str, window_days: int,
-                             reference_date: datetime | None = None) -> int | None:
-        ref = reference_date or datetime.now(timezone.utc)
-        since, until = _utc(ref - timedelta(days=window_days)), _utc(ref)
-        row = self.conn.execute(
-            """SELECT id FROM messages
-               WHERE text_hash=? AND date>=? AND date<=?
-               ORDER BY date DESC LIMIT 1""",
-            (text_hash, since, until),
-        ).fetchone()
-        return int(row["id"]) if row else None
-
-    def recent_lead_texts(self, window_days: int, limit: int,
-                          reference_date: datetime | None = None) -> list[tuple[int, int | None, str]]:
-        ref = reference_date or datetime.now(timezone.utc)
-        since, until = _utc(ref - timedelta(days=window_days)), _utc(ref)
-        rows = self.conn.execute(
-            """SELECT id, user_id, normalized_text FROM messages
-               WHERE status IN ('lead','project_signal','duplicate')
-                 AND date>=? AND date<=?
-               ORDER BY date DESC LIMIT ?""",
-            (since, until, limit),
-        ).fetchall()
-        return [(int(r["id"]), r["user_id"], r["normalized_text"]) for r in rows]
-
     # ---------- opportunities ----------
-    def insert_lead(self, message_id: int, lead_type: str, source_type: str,
-                    product: str | None, location: str | None,
-                    amount: str | None, size: str | None) -> int:
-        with self.conn:
-            cur = self.conn.execute(
-                """INSERT INTO leads(
-                       message_id, lead_type, source_type, product, location, amount, size)
-                   VALUES(?,?,?,?,?,?,?)""",
-                (message_id, lead_type, source_type, product, location, amount, size),
-            )
-            return int(cur.lastrowid)
-
     def set_lead_notified(self, lead_id: int, bot_message_id: int | None) -> None:
         with self.conn:
             self.conn.execute(
@@ -299,14 +340,6 @@ class Database:
             return cur.rowcount > 0
 
     # ---------- notifications ----------
-    def enqueue_notification(self, lead_id: int, payload: dict[str, Any]) -> int:
-        with self.conn:
-            cur = self.conn.execute(
-                "INSERT INTO notifications(lead_id, payload) VALUES(?,?)",
-                (lead_id, json.dumps(payload, ensure_ascii=False)),
-            )
-            return int(cur.lastrowid)
-
     def pending_notifications(self, max_attempts: int = 50) -> list[sqlite3.Row]:
         return self.conn.execute(
             "SELECT * FROM notifications WHERE status='pending' AND attempts<? ORDER BY id LIMIT 20",
@@ -370,7 +403,6 @@ class Database:
         rated = out["confirmed"] + out["rejected"]
         out["precision"] = round(out["confirmed"] / rated, 3) if rated else None
 
-        perf_params = params + params
         time_msg = "AND COALESCE(m.date,m.created_at) >= datetime('now', ?)" if days is not None else ""
         rows = q(
             f"""SELECT

@@ -8,13 +8,6 @@ from typing import Any
 import yaml
 
 FLAGS = re.IGNORECASE
-KNOWN_FEATURES = {
-    "intent", "intent_strong", "product", "size", "amount", "location",
-    "location_fallback", "context", "project_signal", "professional_actor",
-    "question", "sell", "ad", "many_products", "url",
-    "material_product", "non_target_product", "short_request", "service_request", "ambiguous_material",
-}
-
 class ConfigError(Exception):
     pass
 
@@ -62,29 +55,6 @@ class AdSettings:
     caps_ratio_threshold: float = 0.5
     caps_min_letters: int = 20
 
-@dataclass(frozen=True)
-class HardRule:
-    id: str
-    all: tuple[str, ...]
-    none: tuple[str, ...]
-
-@dataclass(frozen=True)
-class DedupSettings:
-    window_days: int = 7
-    fuzzy_threshold: int = 90
-    same_user_fuzzy_threshold: int = 80
-    max_candidates: int = 500
-
-@dataclass(frozen=True)
-class Scoring:
-    weights: dict[str, int]
-    notify_threshold: int
-    project_signal_threshold: int
-    potential_threshold: int
-    lead_rules: tuple[HardRule, ...]
-    not_lead_rules: tuple[HardRule, ...]
-    dedup: DedupSettings
-
 @dataclass
 class AppConfig:
     chats: list[Chat]
@@ -97,11 +67,8 @@ class AppConfig:
     amount_patterns: list[re.Pattern]
     intents: list[Rule]
     sell_rules: list[Rule]
-    hard_exclusions: list[Rule]
-    min_length: int
     ad: AdSettings
     locations: list[Location]
-    scoring: Scoring
     non_target_rules: list[Rule]
     potential_request_rules: list[Rule]
     request_detail_rules: list[Rule]
@@ -140,39 +107,6 @@ def _rules(items: list[dict] | None, where: str) -> list[Rule]:
                            bool(item.get("strong", False))))
     return result
 
-def _hard_rules(items: list[dict] | None, where: str) -> tuple[HardRule, ...]:
-    result = []
-    for i, item in enumerate(items or []):
-        rid = str(item.get("id") or f"{where}_{i}")
-        all_ = tuple(item.get("all") or [])
-        none = tuple(item.get("none") or [])
-        if not all_:
-            raise ConfigError(f"{where}.{rid}: 'all' must not be empty")
-        for feature in (*all_, *none):
-            if feature not in KNOWN_FEATURES:
-                raise ConfigError(f"{where}.{rid}: unknown feature {feature!r}")
-        result.append(HardRule(rid, all_, none))
-    return tuple(result)
-
-def _merge_chat_rows(base: list[dict], extra: list[dict]) -> list[dict]:
-    merged: dict[str, dict] = {}
-    order: list[str] = []
-    for row in [*base, *extra]:
-        username = str(row.get("username") or "").lower()
-        key = f"u:{username}" if username else f"i:{row.get('chat_id', row.get('id'))}"
-        if key not in merged:
-            order.append(key)
-            merged[key] = dict(row)
-        else:
-            # Professional config overrides metadata but keeps a known numeric chat_id.
-            old = merged[key]
-            new = dict(old)
-            new.update(row)
-            if row.get("chat_id") is None and old.get("chat_id") is not None:
-                new["chat_id"] = old["chat_id"]
-            merged[key] = new
-    return [merged[k] for k in order]
-
 def load_config(config_dir: Path) -> AppConfig:
     config_dir = Path(config_dir)
 
@@ -181,36 +115,8 @@ def load_config(config_dir: Path) -> AppConfig:
     if not source_types:
         raise ConfigError("source_types.yaml: source_types is empty")
 
-    base_rows = _load_yaml(config_dir / "chats.yaml").get("chats") or []
-    professional_rows = _load_yaml(config_dir / "professional_chats.yaml").get("chats") or []
-    document_rows = _load_yaml(config_dir / "document_chats.yaml", required=False).get("chats") or []
-    policy = _load_yaml(config_dir / "source_policy.yaml").copy()
-    disabled_kinds = {str(x).lower() for x in policy.get("disabled_kinds") or []}
-    disabled_id_contains = [str(x).lower() for x in policy.get("disabled_id_contains") or []]
-
+    # Chat state is loaded from SQLite by the runtime, not from rule files.
     chats: list[Chat] = []
-    for i, c in enumerate(_merge_chat_rows(_merge_chat_rows(base_rows, professional_rows), document_rows)):
-        if not c.get("id"):
-            raise ConfigError(f"chats[{i}]: 'id' is required")
-        if c.get("chat_id") is None and not c.get("username"):
-            raise ConfigError(f"chats[{c['id']}]: chat_id or username is required")
-        source_type = str(c.get("source_type") or "legacy")
-        if source_type not in source_types:
-            raise ConfigError(f"chats[{c['id']}]: unknown source_type {source_type!r}")
-        enabled = bool(c.get("enabled", True))
-        kind = str(c.get("kind") or "")
-        cid = str(c["id"]).lower()
-        if kind.lower() in disabled_kinds or any(x in cid for x in disabled_id_contains):
-            enabled = False
-        chats.append(Chat(
-            id=str(c["id"]), name=str(c.get("name") or c["id"]),
-            chat_id=int(c["chat_id"]) if c.get("chat_id") is not None else None,
-            username=c.get("username") or None, location=c.get("location"),
-            district=c.get("district"), kind=c.get("kind"), source_type=source_type,
-            require_location=bool(c.get("require_location", False)),
-            auto_join=bool(c.get("auto_join", False)),
-            enabled=enabled, priority=int(c.get("priority", 1)), comment=c.get("comment"),
-        ))
 
     prod_raw = _load_yaml(config_dir / "products.yaml")
     products = []
@@ -246,9 +152,6 @@ def load_config(config_dir: Path) -> AppConfig:
 
     excl_raw = _load_yaml(config_dir / "exclusions.yaml")
     sell_rules = _rules(excl_raw.get("sell_intents"), "sell_intents")
-    hard_raw = excl_raw.get("hard_exclusions") or {}
-    hard_exclusions = _rules(hard_raw.get("patterns"), "hard_exclusions")
-    min_length = int(hard_raw.get("min_length", 0))
     ad = AdSettings(**{k: v for k, v in (excl_raw.get("ad_features") or {}).items()
                        if k in AdSettings.__dataclass_fields__})
 
@@ -264,31 +167,12 @@ def load_config(config_dir: Path) -> AppConfig:
             raise ConfigError(f"locations.{loc['name']}: 'patterns' must not be empty")
         locations.append(Location(str(loc["name"]), pats))
 
-    sc_raw = _load_yaml(config_dir / "scoring.yaml")
-    weights = {str(k): int(v) for k, v in (sc_raw.get("weights") or {}).items()}
-    for key in weights:
-        if key not in KNOWN_FEATURES:
-            raise ConfigError(f"scoring.yaml: unknown weight key {key!r}")
-    thresholds = sc_raw.get("thresholds") or {}
-    hard = sc_raw.get("hard_rules") or {}
-    scoring = Scoring(
-        weights=weights,
-        notify_threshold=int(thresholds.get("notify", 8)),
-        project_signal_threshold=int(thresholds.get("project_signal", 6)),
-        potential_threshold=int(thresholds.get("potential", 5)),
-        lead_rules=_hard_rules(hard.get("lead"), "hard_rules.lead"),
-        not_lead_rules=_hard_rules(hard.get("not_lead"), "hard_rules.not_lead"),
-        dedup=DedupSettings(**{k: v for k, v in (sc_raw.get("dedup") or {}).items()
-                               if k in DedupSettings.__dataclass_fields__}),
-    )
-
     return AppConfig(
         chats=chats, products=products, context_rules=context_rules,
         project_signal_rules=project_signal_rules,
         professional_actor_rules=professional_actor_rules,
         source_types=source_types, size_patterns=size_patterns, amount_patterns=amount_patterns,
-        intents=intents, sell_rules=sell_rules, hard_exclusions=hard_exclusions,
-        min_length=min_length, ad=ad, locations=locations, scoring=scoring,
+        intents=intents, sell_rules=sell_rules, ad=ad, locations=locations,
         non_target_rules=_rules(qualification.get("non_target_products"), "non_target_products"),
         potential_request_rules=_rules(qualification.get("potential_requests"), "potential_requests"),
         request_detail_rules=_rules(qualification.get("request_details"), "request_details"),

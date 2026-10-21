@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
@@ -11,17 +12,48 @@ import aiohttp
 from src.metrics import Metrics
 from src.storage.database import Database
 from src.telegram.chat_links import extract_links, parse_link
+from src.telegram.formatter import build_indirect_digest
+from src.storage.database import _utc
 
 log = logging.getLogger("notifier")
-FEEDBACK = {"lead": ("confirmed", "✅ Отмечено как лид"),
-            "notlead": ("rejected", "❌ Отмечено: не лид")}
+FEEDBACK = {"lead": ("confirmed", "✅ Сохранено: полезный контакт"),
+            "notlead": ("rejected", "❌ Сохранено: мусор")}
 HELP = (
-    "Пришли одну или несколько ссылок на Telegram-чаты одним сообщением.\n"
-    "Можно без команды или так: /addchat https://t.me/name https://t.me/+invite\n"
-    "Поддерживаются @username и ссылки-приглашения. Мониторинг включится без перезапуска.\n"
-    "Закрытый чат с одобрением появится после принятия заявки.\n\n"
-    "/chats — активные источники и состояние очереди\n"
-    "/stats, /stats7, /stats30 — статистика"
+    "Я ищу покупателей металлопроката, пиломатериалов и изготовления из металла "
+    "в подключённых Telegram-чатах. Регионы не ограничены.\n\n"
+    "КАК ПОДКЛЮЧИТЬ ЧАТ\n"
+    "Пришли @имя_чата или ссылку. Можно сразу несколько, каждую с новой строки:\n"
+    "@example_chat\nhttps://t.me/another_chat\nhttps://t.me/+приглашение\n"
+    "Команда необязательна; можно /addchat @example_chat. "
+    "Я сообщу результат по каждому адресу. Если нужно одобрение администратора, "
+    "дождусь его и включу мониторинг автоматически. Личные аккаунты и боты не подходят.\n\n"
+    "КАК ЧИТАТЬ КАРТОЧКИ\n"
+    "🔥 Прямой лид — запрос на наши товары или изготовление/обработку металла.\n"
+    "🟡 Непрямой лид — полезный строительный контакт для дальнейшего общения; "
+    "покупка наших материалов не заявлена. Такие карточки приходят сразу, "
+    "а в 21:00 МСК — сводка без повторов.\n"
+    "Короткие запросы без деталей и сомнительные случаи сохраняю без рассылки. "
+    "Явную рекламу отсекаю до платной проверки Jev.\n"
+    "В карточке можно открыть исходное сообщение и написать автору, если у него есть @имя. "
+    "Нажми «✅ Полезно» или «❌ Мусор»: оценка сохранится для анализа качества. "
+    "Отмеченное мусором не попадёт в следующую сводку. Оценку можно изменить повторным нажатием.\n\n"
+    "КОМАНДЫ\n"
+    "/help — эта инструкция.\n"
+    "/chats — список чатов, их номера, режим и качество за период наблюдения.\n"
+    "/pause ID — отключить Jev и карточки для чата; новые сообщения останутся в архиве.\n"
+    "/resume ID — вернуть проверку новых сообщений. Архив за паузу автоматически не рассылается.\n"
+    "/keep ID — защитить важный чат от автоматической паузы.\n"
+    "/unkeep ID — убрать защиту.\n"
+    "ID — число в скобках из /chats, включая минус. Пример: /pause -1001234567890.\n"
+    "Автопауза: по умолчанию после 30 дней наблюдения и 1000 уникальных сообщений "
+    "без полезных возможностей; я пришлю причину. Архив продолжит пополняться.\n"
+    "/indirect или /digest — непрямые лиды за последние 24 часа.\n"
+    "/jev — расходы, месячный лимит и очередь проверки. "
+    "Если лимит исчерпан или API недоступен, сообщения ждут в БД, рассылка без проверки не включается.\n"
+    "/jevretry — повторить проверки после устранения ошибки API; месячный лимит сохраняется.\n"
+    "/stats — статистика за всё время; /stats7 — за неделю; /stats30 — за месяц.\n\n"
+    "Управление доступно владельцу в личном диалоге либо администраторам настроенной группы. "
+    "Пересылка примера боту сама по себе не запускает проверку лида."
 )
 
 
@@ -31,10 +63,12 @@ class BotApiError(Exception):
 
 class Notifier:
     def __init__(self, token: str, owner_chat_id: int, db: Database, metrics: Metrics,
-                 retry_interval: float = 5.0, max_attempts: int = 50):
+                 retry_interval: float = 5.0, max_attempts: int = 50,
+                 monthly_budget_usd: float = 4.0):
         self.base = f"https://api.telegram.org/bot{token}/"
         self.owner, self.db, self.metrics = owner_chat_id, db, metrics
         self.retry_interval, self.max_attempts = retry_interval, max_attempts
+        self.monthly_budget_usd = monthly_budget_usd
         self._session: aiohttp.ClientSession | None = None
         self._offset = 0
         self._wakeup = asyncio.Event()
@@ -47,6 +81,19 @@ class Notifier:
         self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
         me = await self.api("getMe")
         log.info("Bot authorized as @%s", me.get("username"))
+        try:
+            await self.api("setMyCommands", commands=[
+                {"command": name, "description": description} for name, description in (
+                    ("help", "Как пользоваться ботом"), ("addchat", "Добавить чаты ссылками или @именами"),
+                    ("chats", "Чаты, режимы и качество"), ("indirect", "Непрямые лиды за сутки"),
+                    ("jev", "Расходы и очередь проверки"), ("pause", "Пауза оценки: /pause ID"),
+                    ("resume", "Вернуть оценку: /resume ID"), ("keep", "Защитить от автопаузы: /keep ID"),
+                    ("unkeep", "Убрать защиту: /unkeep ID"), ("jevretry", "Повторить проверки с ошибкой"),
+                    ("stats", "Статистика за всё время"), ("stats7", "Статистика за неделю"),
+                    ("stats30", "Статистика за месяц"),
+                )])
+        except BotApiError:
+            log.warning("Could not update bot command menu")
 
     async def close(self) -> None:
         if self._session:
@@ -70,6 +117,8 @@ class Notifier:
             try:
                 for row in self.db.pending_notifications(self.max_attempts):
                     await self._send_row(row)
+                for row in self.db.pending_system_notifications():
+                    await self._send_system(row)
             except Exception:
                 log.exception("Sender loop error")
             self._wakeup.clear()
@@ -94,6 +143,17 @@ class Notifier:
         self.db.mark_notification_sent(int(row["id"]))
         self.db.set_lead_notified(int(row["lead_id"]), result.get("message_id"))
         self.metrics.inc("notifications_sent")
+
+    async def _send_system(self, row: Any) -> None:
+        payload=json.loads(row["payload"])
+        try:
+            await self.api("sendMessage",chat_id=self.owner,text=payload["text"],
+                parse_mode=payload.get("parse_mode"),disable_web_page_preview=True,
+                reply_markup=payload.get("reply_markup"))
+        except (aiohttp.ClientError,asyncio.TimeoutError,BotApiError) as exc:
+            self.db.finish_system_notification(row["id"],type(exc).__name__)
+            return
+        self.db.finish_system_notification(row["id"])
 
     async def run_polling(self) -> None:
         while True:
@@ -123,6 +183,7 @@ class Notifier:
         stats = self.db.stats(days)
         stats.update(self.metrics.snapshot())
         stats["source_requests"] = self.db.source_request_counts()
+        stats["jev"] = self.db.semantic_stats()
         await self.send_owner(json.dumps(stats, ensure_ascii=False, indent=1))
 
     async def _add_links(self, text: str) -> None:
@@ -152,10 +213,7 @@ class Notifier:
             await self._handle_callback(cb)
             return
         msg = upd.get("message")
-        if not msg or msg.get("chat", {}).get("id") != self.owner:
-            return
-        # Management is private to OWNER_CHAT_ID; forwarded messages cannot grant access.
-        if msg.get("from", {}).get("id") != self.owner:
+        if not msg or not await self._authorized(msg.get("from", {}), msg.get("chat", {}).get("id")):
             return
         text = (msg.get("text") or msg.get("caption") or "").strip()
         links_text = text + "\n" + "\n".join(
@@ -168,17 +226,63 @@ class Notifier:
         elif command in {"/stats", "/stats7", "/stats30"}:
             await self._send_stats({"/stats": None, "/stats7": 7, "/stats30": 30}[command])
         elif command == "/chats" and self.chat_manager:
-            chats = self.chat_manager.listener.resolved.values()
-            lines = [f"Активных источников: {len(self.chat_manager.listener.resolved)}"]
-            lines.extend(f"• {c.name} — @{c.username}" if c.username else f"• {c.name} ({c.chat_id})" for c in chats)
+            chats=self.db.source_health()
+            lines=[f"Источников в БД: {len(chats)}"]
+            for c in chats:
+                status="⛔ Отключён" if not c["enabled"] else "✅ Jev" if c["analysis_enabled"] else "⏸ Архив без Jev"
+                lines.append(f"{status} · {c['name']} ({c['chat_id']}) · полезных: {c['useful']} / уникальных: {c['unique_messages']}"+(" · 🔒" if c["pinned"] else ""))
             lines.append("Очередь: " + json.dumps(self.db.source_request_counts(), ensure_ascii=False))
             await self.send_owner("\n".join(lines))
+        elif command in {"/pause","/resume","/keep","/unkeep"}:
+            parts=text.split()
+            if len(parts)!=2 or not parts[1].lstrip("-").isdigit():
+                await self.send_owner(f"Формат: {command} ID. Номера есть в /chats.")
+                return
+            chat_id=int(parts[1]);ok=False
+            if command in {"/keep","/unkeep"}:
+                ok=self.db.set_source_pinned(chat_id,command=="/keep")
+            elif command=="/pause":
+                ok=self.db.set_source_analysis(chat_id,False)
+            elif self.chat_manager:
+                try:
+                    ok=await self.chat_manager.resume(chat_id)
+                except (ValueError, OSError, asyncio.TimeoutError):
+                    await self.send_owner("Не удалось подключиться к чату. Проверь доступ аккаунта и повтори /resume позже.")
+                    return
+            await self.send_owner("✅ Сохранено." if ok else "Источник не найден или пока недоступен.")
+        elif command=="/jev":
+            stats=self.db.semantic_stats()
+            await self.send_owner(f"Jev · {stats['month']}\nПотрачено/зарезервировано: ${stats['spent_or_reserved_usd']:.4f} из ${self.monthly_budget_usd:g} в месяц\nОчередь: "+json.dumps(stats["jobs"],ensure_ascii=False))
+        elif command=="/jevretry":
+            with self.db.conn:
+                count=self.db.conn.execute("UPDATE semantic_jobs SET state='queued',next_attempt=0,attempts=0 WHERE state='failed'").rowcount
+            await self.send_owner(f"Повторно поставлено на проверку: {count}. Лимит расходов сохраняется.")
+        elif command in {"/indirect","/digest"}:
+            now=datetime.now(timezone.utc)
+            rows=self.db.indirect_since(_utc(now-timedelta(days=1)),_utc(now))
+            for i,payload in enumerate(build_indirect_digest(rows,"Последние 24 часа")):
+                self.db.enqueue_system(f"manual-digest:{upd['update_id']}:{i}",payload)
+            self.wakeup()
         elif command == "/addchat" or extract_links(links_text):
             await self._add_links(links_text)
+        elif text.startswith("/"):
+            await self.send_owner("Команда не найдена. Открой /help — там инструкция и примеры.")
+
+    async def _authorized(self, sender: dict, chat_id: int | None) -> bool:
+        if chat_id != self.owner or not sender.get("id") or sender.get("is_bot"):
+            return False
+        if self.owner > 0:
+            return sender["id"] == self.owner
+        # A group administrator may manage the configured operator group.
+        try:
+            member = await self.api("getChatMember", chat_id=self.owner, user_id=sender["id"])
+        except (BotApiError, aiohttp.ClientError, asyncio.TimeoutError):
+            return False
+        return member.get("status") in {"creator", "administrator"}
 
     async def _handle_callback(self, cb: dict) -> None:
         cb_id = cb["id"]
-        if cb.get("from", {}).get("id") != self.owner:
+        if not await self._authorized(cb.get("from", {}), cb.get("message", {}).get("chat", {}).get("id", self.owner)):
             await self.api("answerCallbackQuery", callback_query_id=cb_id, text="Нет доступа")
             return
         action, _, lead_id = (cb.get("data") or "").partition(":")

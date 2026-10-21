@@ -38,16 +38,21 @@ class ChatManager:
 
     def submit(self, raw: str, *, notify: bool = True) -> str:
         link = parse_link(raw)
-        if link.kind == "public" and any(
-            not c.enabled and (c.username or "").lower() == link.target for c in self.pipeline.cfg.chats
-        ):
-            raise ValueError("Источник отключён в конфигурации.")
+        if link.kind=="public":
+            stored=self.db.conn.execute("SELECT chat_id,analysis_enabled FROM sources WHERE lower(username)=?", (link.target,)).fetchone()
+            if stored and not stored["analysis_enabled"] and stored["chat_id"] in self.listener.resolved:
+                self.db.set_source_analysis(stored["chat_id"],True)
+                return "пауза снята, оценка Jev включена"
         if link.kind == "public" and any(
             (c.username or "").lower() == link.target for c in self.listener.resolved.values()
         ):
             return "уже мониторится"
         old = self.db.source_request(link.key)
         if old and old["chat_id"] in self.listener.resolved:
+            source = self.db.source(old["chat_id"])
+            if source and not source["analysis_enabled"]:
+                self.db.set_source_analysis(old["chat_id"], True)
+                return "пауза снята, оценка Jev включена"
             return "уже мониторится"
         added = self.db.enqueue_source(link.key, link.url, notify)
         self._wakeup.set()
@@ -108,13 +113,14 @@ class ChatManager:
         self._check_entity(entity)
         chat_id = utils.get_peer_id(entity)
         if chat_id in self.listener.resolved:
+            self.db.set_source_analysis(chat_id, True)
             return self.listener.resolved[chat_id], False
         username = getattr(entity, "username", None)
         known = next((c for c in self.pipeline.cfg.chats if c.chat_id == chat_id or (
             username and (c.username or "").lower() == username.lower()
         )), None)
-        if known and not known.enabled:
-            raise ValueError("Источник отключён в конфигурации. Сначала включи его в config.")
+        if known is None:
+            known=self.db.source_chat(chat_id)
         chat = replace(known) if known else Chat(
             id=username.lower() if username else f"chat_{abs(chat_id)}",
             name=getattr(entity, "title", None) or username or str(chat_id),
@@ -124,9 +130,20 @@ class ChatManager:
         chat.name = getattr(entity, "title", None) or chat.name
         chat.require_location = False
         self.db.upsert_source(chat, added_via="config" if known else "telegram_bot")
+        self.db.set_source_analysis(chat_id,True)
         self.pipeline.register_chat(chat)
         self.listener.resolved[chat_id] = chat
         return chat, True
+
+    async def resume(self, chat_id: int) -> bool:
+        chat=self.db.source_chat(chat_id)
+        if chat is None:return False
+        if chat_id not in self.listener.resolved:
+            chat.enabled=True
+            resolved=await self.listener.add_chat(chat)
+            self.pipeline.register_chat(resolved)
+        self.db.set_source_analysis(chat_id,True)
+        return True
 
     async def process_request(self, row) -> str | None:
         link = parse_link(row["url"])

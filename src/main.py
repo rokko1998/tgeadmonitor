@@ -5,13 +5,15 @@ import logging
 import signal
 import sys
 import time
-from dataclasses import replace
 from telethon.errors import FloodWaitError, RPCError
 from src.config.loader import ConfigError, load_config
 from src.metrics import Metrics
+from src.maintenance import Maintenance
 from src.processing.pipeline import Pipeline
+from src.processing.semantic_worker import SemanticWorker
 from src.settings import Settings, SettingsError
 from src.storage.database import Database
+from src.storage.database import _utc
 from src.telegram.chat_manager import ChatManager
 from src.telegram.listener import Listener, build_client
 from src.telegram.notifier import Notifier
@@ -41,19 +43,6 @@ async def restore_sources(listener: Listener, pipeline: Pipeline, db: Database) 
             pipeline.register_chat(chat)
             db.upsert_source(chat)
 
-def merge_runtime_sources(config_chats, runtime_chats):
-    merged = list(runtime_chats)
-    for chat in config_chats:
-        matches = [c for c in merged if c.id == chat.id or (
-            chat.chat_id is not None and c.chat_id == chat.chat_id
-        ) or (chat.username and c.username and chat.username.lower() == c.username.lower())]
-        if matches:
-            known_id = next((c.chat_id for c in matches if c.chat_id is not None), None)
-            chat = replace(chat, chat_id=chat.chat_id if chat.chat_id is not None else known_id)
-            merged = [c for c in merged if c not in matches]
-        merged.append(chat)
-    return merged
-
 async def run() -> None:
     try:
         settings = Settings.from_env()
@@ -65,20 +54,29 @@ async def run() -> None:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("telethon").setLevel(logging.WARNING)
 
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    db = Database(settings.db_path)
     try:
         cfg = load_config(settings.config_dir)
     except ConfigError as e:
         log.error("Config error: %s", e)
         sys.exit(2)
 
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(settings.db_path)
-    cfg.chats = merge_runtime_sources(cfg.chats, db.runtime_sources())
+    db.seed_sources_once()
+    cfg.chats = db.runtime_sources()
+    if not db.runtime_value("semantic_started_at_v1"):
+        with db.conn:
+            # Historical pending regex notifications must not bypass the new gate.
+            db.conn.execute("UPDATE notifications SET status='superseded' WHERE status='pending'")
+            db.conn.execute("INSERT INTO runtime_state VALUES('semantic_started_at_v1',?)", (_utc(),))
 
     metrics = Metrics()
-    notifier = Notifier(settings.bot_token, settings.owner_chat_id, db, metrics)
+    notifier = Notifier(settings.bot_token, settings.owner_chat_id, db, metrics,
+                        monthly_budget_usd=settings.jev_monthly_budget_usd)
     await notifier.start()
     pipeline = Pipeline(cfg, db, notifier, metrics, store_all=settings.store_all_messages)
+    semantic = SemanticWorker(db,settings,notifier,metrics)
+    maintenance = Maintenance(db,settings,notifier)
 
     client = build_client(settings.api_id, settings.api_hash, settings.session, settings.data_dir)
     await client.connect()
@@ -131,6 +129,8 @@ async def run() -> None:
         asyncio.create_task(manager.run(notifier.send_owner), name="source_onboarding"),
         asyncio.create_task(restore_sources(listener, pipeline, db), name="source_restore"),
         asyncio.create_task(metrics_loop(metrics), name="metrics"),
+        asyncio.create_task(semantic.run(), name="semantic"),
+        asyncio.create_task(maintenance.run(), name="maintenance"),
         asyncio.create_task(client.run_until_disconnected(), name="telethon"),
         asyncio.create_task(stop.wait(), name="stop"),
     ]
