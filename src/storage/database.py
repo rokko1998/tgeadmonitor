@@ -129,6 +129,7 @@ class Database(SemanticStorage):
             self._add_column("sources", "pinned INTEGER NOT NULL DEFAULT 0", "pinned")
             self._add_column("sources", "quality_since TEXT", "quality_since")
             self._add_column("sources", "observed_seconds INTEGER NOT NULL DEFAULT 0", "observed_seconds")
+            self._add_column("sources", "auto_join INTEGER NOT NULL DEFAULT 0", "auto_join")
             self.conn.execute("UPDATE sources SET quality_since=datetime('now') WHERE quality_since IS NULL")
 
     # ---------- sources ----------
@@ -139,8 +140,8 @@ class Database(SemanticStorage):
             self.conn.execute(
                 """INSERT INTO sources(
                        chat_id, internal_id, username, name, location, source_type,
-                       require_location, enabled, priority, added_via,quality_since)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                       require_location, enabled, priority, added_via,auto_join,quality_since)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
                    ON CONFLICT(chat_id) DO UPDATE SET
                        internal_id=excluded.internal_id,
                        username=excluded.username,
@@ -148,9 +149,10 @@ class Database(SemanticStorage):
                        location=COALESCE(excluded.location, sources.location),
                        source_type=excluded.source_type,
                        require_location=excluded.require_location,
-                       priority=excluded.priority""",
+                       priority=excluded.priority,
+                       auto_join=MAX(sources.auto_join,excluded.auto_join)""",
                 (c.chat_id, c.id, c.username, c.name, c.location, c.source_type,
-                 int(c.require_location), int(c.enabled), c.priority, added_via),
+                 int(c.require_location), int(c.enabled), c.priority, added_via,int(c.auto_join)),
             )
             self.conn.execute("""UPDATE source_seeds SET resolved_chat_id=?
                 WHERE internal_id=? OR lower(json_extract(chat_json,'$.username'))=lower(?)""",
@@ -170,6 +172,7 @@ class Database(SemanticStorage):
                 username=r["username"], location=r["location"],
                 source_type=r["source_type"] or "unclassified",
                 require_location=bool(r["require_location"]), enabled=True,
+                auto_join=bool(r["auto_join"]),
                 priority=int(r["priority"]), comment="runtime source",
             )
             for r in rows
@@ -180,6 +183,7 @@ class Database(SemanticStorage):
         return chats
 
     def seed_sources_once(self) -> None:
+        self._migrate_auto_join_once()
         if self.runtime_value("sources_seeded_v1"):
             return
         # Only a new/migrating DB reads the historical bootstrap manifest.
@@ -201,6 +205,23 @@ class Database(SemanticStorage):
                                       (chat.id,json.dumps(asdict(chat),ensure_ascii=False)))
         self.set_runtime_value("sources_seeded_v1",_utc())
 
+    def _migrate_auto_join_once(self) -> None:
+        if self.runtime_value("sources_auto_join_v1"):
+            return
+        rows=json.loads(Path(__file__).with_name("source_seed.json").read_text(encoding="utf-8"))
+        with self.conn:
+            for row in rows:
+                if row.get("auto_join"):
+                    self.conn.execute("UPDATE sources SET auto_join=1 WHERE chat_id=? OR lower(username)=lower(?)",
+                                      (row.get("chat_id"),row.get("username")))
+            self.conn.execute("INSERT INTO runtime_state VALUES('sources_auto_join_v1',?)", (_utc(),))
+
+    def should_auto_join(self, chat: Chat) -> bool:
+        if not chat.enabled or not chat.auto_join or not chat.username:
+            return False
+        source=self.source(chat.chat_id) if chat.chat_id is not None else None
+        return source is None or bool(source["enabled"] and source["analysis_enabled"])
+
     def source(self, chat_id: int):
         return self.conn.execute("SELECT * FROM sources WHERE chat_id=?", (chat_id,)).fetchone()
 
@@ -208,7 +229,8 @@ class Database(SemanticStorage):
         r=self.source(chat_id)
         return Chat(id=r["internal_id"] or str(chat_id),name=r["name"] or str(chat_id),
                     chat_id=chat_id,username=r["username"],location=r["location"],
-                    source_type=r["source_type"],priority=r["priority"],enabled=bool(r["enabled"])) if r else None
+                    source_type=r["source_type"],priority=r["priority"],enabled=bool(r["enabled"]),
+                    auto_join=bool(r["auto_join"])) if r else None
 
     def set_source_analysis(self, chat_id: int, enabled: bool, reason: str = "manual") -> bool:
         with self.conn:

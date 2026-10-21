@@ -26,7 +26,8 @@ HELP = (
     "@example_chat\nhttps://t.me/another_chat\nhttps://t.me/+приглашение\n"
     "Команда необязательна; можно /addchat @example_chat. "
     "Я сообщу результат по каждому адресу. Если нужно одобрение администратора, "
-    "дождусь его и включу мониторинг автоматически. Личные аккаунты и боты не подходят.\n\n"
+    "проверю вступление каждые 5 минут и включу мониторинг автоматически. "
+    "Задача сохранится после перезапуска. Личные аккаунты и боты не подходят.\n\n"
     "КАК ЧИТАТЬ КАРТОЧКИ\n"
     "🔥 Прямой лид — запрос на наши товары или изготовление/обработку металла.\n"
     "🟡 Непрямой лид — полезный строительный контакт для дальнейшего общения; "
@@ -227,18 +228,30 @@ class Notifier:
             await self._send_stats({"/stats": None, "/stats7": 7, "/stats30": 30}[command])
         elif command == "/chats" and self.chat_manager:
             chats=self.db.source_health()
-            lines=[f"Источников в БД: {len(chats)}"]
+            resolved=self.chat_manager.listener.resolved
+            pending=self.db.conn.execute("SELECT COUNT(*) FROM source_seeds WHERE resolved_chat_id IS NULL").fetchone()[0]
+            lines=[f"Источников в БД: {len(chats)}. Подключено сейчас: {len(resolved)}. Ожидает доступа/разрешения имени: {pending}."]
             for c in chats:
-                status="⛔ Отключён" if not c["enabled"] else "✅ Jev" if c["analysis_enabled"] else "⏸ Архив без Jev"
+                status=("⛔ Отключён" if not c["enabled"] else "⏳ Нет подключения" if c["chat_id"] not in resolved
+                        else "✅ Jev" if c["analysis_enabled"] else "⏸ Архив без Jev")
                 lines.append(f"{status} · {c['name']} ({c['chat_id']}) · полезных: {c['useful']} / уникальных: {c['unique_messages']}"+(" · 🔒" if c["pinned"] else ""))
+            if pending:
+                for row in self.db.conn.execute("SELECT chat_json FROM source_seeds WHERE resolved_chat_id IS NULL"):
+                    seed=json.loads(row['chat_json'])
+                    if seed.get('enabled',True):
+                        lines.append(f"⏳ Ещё не подключён · {seed['name']} · @{seed.get('username','—')}")
             lines.append("Очередь: " + json.dumps(self.db.source_request_counts(), ensure_ascii=False))
             await self.send_owner("\n".join(lines))
         elif command in {"/pause","/resume","/keep","/unkeep"}:
             parts=text.split()
-            if len(parts)!=2 or not parts[1].lstrip("-").isdigit():
+            try:
+                chat_id=int(parts[1]) if len(parts)==2 else None
+            except ValueError:
+                chat_id=None
+            if chat_id is None:
                 await self.send_owner(f"Формат: {command} ID. Номера есть в /chats.")
                 return
-            chat_id=int(parts[1]);ok=False
+            ok=False
             if command in {"/keep","/unkeep"}:
                 ok=self.db.set_source_pinned(chat_id,command=="/keep")
             elif command=="/pause":

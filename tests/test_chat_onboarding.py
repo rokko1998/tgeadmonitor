@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from telethon.errors import ChannelPrivateError, InviteRequestSentError
 from telethon.tl.functions.messages import CheckChatInviteRequest
-from telethon.tl.types import Channel, ChatPhotoEmpty, User
+from telethon.tl.types import Channel, ChatInviteAlready, ChatPhotoEmpty, User
 
 from src.config.loader import Chat
 from src.metrics import Metrics
@@ -132,6 +132,77 @@ def test_pending_approval_checks_without_rejoining(tmp_path):
         assert manager.client.await_count == 1
         assert isinstance(manager.client.await_args.args[0], CheckChatInviteRequest)
         assert not manager.listener.resolved
+    finally:
+        db.close()
+
+
+def test_private_approval_task_survives_restart_and_saves_chat_metadata(tmp_path):
+    path=tmp_path / 'leads.db'
+    db=Database(path)
+    manager=make_manager(db,None)
+    manager.submit('https://t.me/+AbC_123')
+    manager.client.side_effect=InviteRequestSentError(request=None)
+    result=asyncio.run(manager.process_request(db.next_source_request()))
+    assert 'каждые 5 минут' in result
+    pending=db.source_request('invite:AbC_123')
+    assert pending['status']=='pending' and pending['approval_requested']
+    assert pending['next_attempt_at']>0
+    assert db.next_source_request() is None
+    db.close()
+    db=Database(path)
+    try:
+        manager=make_manager(db,None)
+        manager.client.return_value=ChatInviteAlready(chat=channel())
+        with db.conn:
+            db.conn.execute('UPDATE source_requests SET next_attempt_at=0')
+        result=asyncio.run(manager.process_request(db.next_source_request()))
+        assert 'мониторинг включён' in result
+        assert manager.client.await_count==1
+        assert isinstance(manager.client.await_args.args[0],CheckChatInviteRequest)
+        source=db.runtime_sources()[0]
+        assert source.chat_id is not None and source.username=='example_chat' and source.name=='Example'
+        assert source.chat_id in manager.listener.resolved
+        manager.pipeline.register_chat.assert_called_once()
+        assert db.source_request('invite:AbC_123')['status']=='active'
+        assert db.next_source_request() is None
+    finally:
+        db.close()
+
+
+def test_public_approval_rechecks_membership_without_resubmitting(tmp_path):
+    db=Database(tmp_path / 'leads.db')
+    try:
+        manager=make_manager(db,channel(left=True))
+        manager.submit('@example_chat')
+        manager.client.side_effect=InviteRequestSentError(request=None)
+        asyncio.run(manager.process_request(db.next_source_request()))
+        manager.client.reset_mock(side_effect=True)
+        manager.client.return_value=None
+        pending=db.source_request('public:example_chat')
+        assert asyncio.run(manager.process_request(pending)) is None
+        manager.client.assert_not_called()  # get_entity only; no repeated JoinChannelRequest
+        manager.client.get_entity.return_value=channel(left=False)
+        result=asyncio.run(manager.process_request(db.source_request('public:example_chat')))
+        assert 'мониторинг включён' in result
+        assert db.runtime_sources()[0].username=='example_chat'
+        assert db.source_request('public:example_chat')['status']=='active'
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('kind',['public','invite'])
+def test_unconfirmed_join_response_schedules_check_instead_of_monitoring(tmp_path,kind):
+    db=Database(tmp_path / 'leads.db')
+    try:
+        manager=make_manager(db,channel(left=True))
+        if kind=='invite':
+            manager.client.side_effect=[SimpleNamespace(),SimpleNamespace(chats=[channel(left=True)])]
+        manager.submit('@example_chat' if kind=='public' else 'https://t.me/+AbC_123')
+        result=asyncio.run(manager.process_request(db.next_source_request()))
+        key='public:example_chat' if kind=='public' else 'invite:AbC_123'
+        assert 'каждые 5 минут' in result
+        assert db.source_request(key)['status']=='pending'
+        assert not manager.listener.resolved and not db.runtime_sources()
     finally:
         db.close()
 

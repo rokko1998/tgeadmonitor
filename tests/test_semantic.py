@@ -5,6 +5,7 @@ import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -270,6 +271,30 @@ def test_seed_migration_never_undoes_database_pause(db, tmp_path):
     assert -100123 in {c.chat_id for c in db.runtime_sources()}
 
 
+def test_autojoin_survives_database_roundtrip_but_never_resumes_pause(db):
+    chat=Chat(id='test',name='Test',chat_id=-100123,username='test_chat',auto_join=True)
+    db.upsert_source(chat)
+    restored=db.source_chat(-100123)
+    assert restored.auto_join and db.should_auto_join(restored)
+    db.set_source_analysis(-100123,False)
+    db.upsert_source(Chat(id='test',name='Updated metadata',chat_id=-100123))
+    assert db.source_chat(-100123).auto_join
+    assert not db.should_auto_join(db.source_chat(-100123))
+
+
+def test_autojoin_one_time_migration_preserves_pause_and_does_not_repeat(db):
+    chat=Chat(id='Avito_Remont',name='Known configured',chat_id=-100456,username='Avito_Remont')
+    db.upsert_source(chat)
+    db.set_source_analysis(chat.chat_id,False)
+    db.seed_sources_once()
+    assert db.source(chat.chat_id)['auto_join']
+    assert not db.source(chat.chat_id)['analysis_enabled']
+    with db.conn:
+        db.conn.execute('UPDATE sources SET auto_join=0 WHERE chat_id=?',(chat.chat_id,))
+    db.seed_sources_once()
+    assert not db.source(chat.chat_id)['auto_join']
+
+
 def test_digest_cutoff_restart_and_after_21_are_lossless(db, cfg, metrics, settings, notifier):
     worker = SemanticWorker(db, settings, notifier, metrics)
     row = queue(db, cfg, metrics)
@@ -322,3 +347,15 @@ def test_configured_group_requires_admin_and_help_explains_workflow(db, metrics)
     assert not asyncio.run(bot._authorized({'id': 42}, -99999))
     for token in ('Непрямой лид', '21:00', '/resume', '/keep', '/jev', '@example_chat', '/jevretry'):
         assert token in HELP
+
+
+def test_chat_list_distinguishes_disconnected_sources(db, metrics):
+    bot=Notifier('unused',42,db,metrics)
+    bot.api=AsyncMock()
+    bot.set_chat_manager(SimpleNamespace(listener=SimpleNamespace(resolved={})))
+    update={'message':{'chat':{'id':42},'from':{'id':42},'text':'/chats'}}
+    asyncio.run(bot._handle_update(update))
+    assert 'Нет подключения' in bot.api.await_args.kwargs['text']
+    bot.chat_manager.listener.resolved[-100123]=object()
+    asyncio.run(bot._handle_update(update))
+    assert '✅ Jev' in bot.api.await_args.kwargs['text']

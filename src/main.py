@@ -110,10 +110,10 @@ async def run() -> None:
     manager = ChatManager(client, db, listener, pipeline, cfg.source_types)
     notifier.set_chat_manager(manager)
     for chat in cfg.enabled_chats():
-        if chat.auto_join and chat.username:
+        if db.should_auto_join(chat):
             manager.submit(f"@{chat.username}", notify=False)
 
-    log.info("Monitoring %d chats. Commands: /stats /stats7 /stats30 /addchat /chats", len(available))
+    log.info("Monitoring %d chats. Commands: /help /chats /jev /indirect /addchat", len(available))
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

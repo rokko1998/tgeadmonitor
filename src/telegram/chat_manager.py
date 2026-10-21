@@ -23,6 +23,7 @@ from src.telegram.chat_links import ChatLink, parse_link
 from src.telegram.listener import Listener
 
 log = logging.getLogger("chat_manager")
+APPROVAL_RECHECK_SECONDS = 300
 
 
 class ApprovalPending(Exception):
@@ -73,7 +74,7 @@ class ChatManager:
                     pass
                 entity = await self.client.get_entity(link.target)
                 if entity.left:
-                    raise ValueError("Участие в чате не подтверждено Telegram.")
+                    raise ApprovalPending
             return entity
 
         checked = await self.client(CheckChatInviteRequest(link.target))
@@ -111,6 +112,8 @@ class ChatManager:
 
     def _activate(self, entity) -> tuple[Chat, bool]:
         self._check_entity(entity)
+        if getattr(entity,"left",False):
+            raise ApprovalPending
         chat_id = utils.get_peer_id(entity)
         if chat_id in self.listener.resolved:
             self.db.set_source_analysis(chat_id, True)
@@ -152,8 +155,10 @@ class ChatManager:
             entity = await self._entity(link, pending=bool(row["approval_requested"]))
             chat, added = self._activate(entity)
         except (ApprovalPending, InviteRequestSentError):
-            self.db.finish_source_request(key, "pending", delay=300)
-            return "⏳ Заявка на вступление отправлена. После одобрения мониторинг включится автоматически." if not row["approval_requested"] else None
+            self.db.finish_source_request(key, "pending", delay=APPROVAL_RECHECK_SECONDS)
+            return ("⏳ Заявка на вступление отправлена. Отложенная проверка сохранена в БД: "
+                    "буду проверять каждые 5 минут, в том числе после перезапуска. "
+                    "После одобрения сохраню данные чата и включу мониторинг автоматически.") if not row["approval_requested"] else None
         except FloodWaitError as exc:
             self.listener.retry_after = time.time() + exc.seconds + 1
             self.db.finish_source_request(key, "flood_wait", error="FloodWaitError", delay=exc.seconds + 1)
