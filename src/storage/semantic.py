@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from src.time_utils import MSK, month_bounds
 
-MSK = timezone(timedelta(hours=3), "MSK")
 NANO_PER_TOKEN = 42  # $0.042 / 1M input tokens; output free, 2026-10-21.
 
 
@@ -47,11 +47,15 @@ class SemanticStorage:
         CREATE TABLE IF NOT EXISTS system_notifications(
           id INTEGER PRIMARY KEY,key TEXT UNIQUE NOT NULL,payload TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,
-          last_error TEXT,created_at TEXT NOT NULL DEFAULT (datetime('now')),sent_at TEXT);
+          last_error TEXT,created_at TEXT NOT NULL DEFAULT (datetime('now')),sent_at TEXT,
+          next_attempt REAL NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS source_seeds(
           internal_id TEXT PRIMARY KEY,chat_json TEXT NOT NULL,resolved_chat_id INTEGER);
         """)
         with self.conn:
+            columns = {row[1] for row in self.conn.execute("PRAGMA table_info(system_notifications)")}
+            if "next_attempt" not in columns:
+                self.conn.execute("ALTER TABLE system_notifications ADD COLUMN next_attempt REAL NOT NULL DEFAULT 0")
             # A crash may leave an accepted request's reservation unresolved; retain
             # its full reservation in the ledger rather than silently refunding it.
             self.conn.execute("UPDATE semantic_jobs SET state='queued' WHERE state='processing'")
@@ -176,12 +180,20 @@ class SemanticStorage:
                               (key,json.dumps(payload,ensure_ascii=False)))
 
     def pending_system_notifications(self):
-        return self.conn.execute("SELECT * FROM system_notifications WHERE status='pending' AND attempts<50 ORDER BY id LIMIT 20").fetchall()
+        return self.conn.execute("""SELECT * FROM system_notifications
+            WHERE status='pending' AND next_attempt<=?
+              AND (attempts<50 OR key LIKE 'monthly-report:%')
+            ORDER BY id LIMIT 20""", (time.time(),)).fetchall()
 
     def finish_system_notification(self, notification_id: int, error: str | None = None) -> None:
         with self.conn:
             if error:
-                self.conn.execute("UPDATE system_notifications SET attempts=attempts+1,last_error=? WHERE id=?", (error[:300],notification_id))
+                row = self.conn.execute("SELECT key,attempts FROM system_notifications WHERE id=?", (notification_id,)).fetchone()
+                if row is None:
+                    return
+                delay = min(3600,30 * 2**min(row["attempts"],7)) if row["key"].startswith("monthly-report:") else 0
+                self.conn.execute("UPDATE system_notifications SET attempts=attempts+1,last_error=?,next_attempt=? WHERE id=?",
+                                  (error[:300],time.time()+delay,notification_id))
             else:
                 self.conn.execute("UPDATE system_notifications SET status='sent',sent_at=datetime('now') WHERE id=?", (notification_id,))
 
@@ -198,3 +210,25 @@ class SemanticStorage:
         return {"month":period,"spent_or_reserved_usd":cost/1_000_000_000,
                 "jobs":{r["state"]:r["n"] for r in self.conn.execute("SELECT state,COUNT(*) n FROM semantic_jobs GROUP BY state")},
                 "decisions":{r["label"]:r["n"] for r in self.conn.execute("SELECT label,COUNT(*) n FROM message_semantics GROUP BY label")}}
+
+    def monthly_report_stats(self, period: str, *, through: datetime | None = None) -> dict:
+        start, end = month_bounds(period)
+        if through is not None:
+            end = min(end, through.astimezone(MSK))
+        since = start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        until = end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        messages = self.conn.execute("""SELECT COUNT(*) AS messages,COUNT(DISTINCT chat_id) AS chats,
+            COALESCE(SUM(status='archived'),0) AS archived_messages,
+            COALESCE(SUM(status<>'archived'),0) AS processed_messages,
+            COUNT(DISTINCT CASE WHEN status<>'archived' THEN chat_id END) AS processed_chats
+            FROM messages WHERE created_at>=? AND created_at<?""", (since,until)).fetchone()
+        leads = self.conn.execute("""SELECT COALESCE(SUM(lead_type='lead'),0) AS direct_leads,
+            COALESCE(SUM(lead_type IN ('indirect','project_signal')),0) AS indirect_leads,
+            COALESCE(SUM(lead_type='lead' AND status='rejected'),0) AS rejected_direct,
+            COALESCE(SUM(lead_type IN ('indirect','project_signal') AND status='rejected'),0) AS rejected_indirect
+            FROM leads WHERE created_at>=? AND created_at<?""", (since,until)).fetchone()
+        cost = self.conn.execute("""SELECT COUNT(*) AS api_attempts,
+            COALESCE(SUM(charged_nano),0) AS spent_nano,
+            COALESCE(SUM(CASE WHEN charged_nano IS NULL THEN reserved_nano ELSE 0 END),0) AS reserved_nano
+            FROM semantic_attempts WHERE month=?""", (period,)).fetchone()
+        return {"period":period,"since":since,"until":until,**dict(messages),**dict(leads),**dict(cost)}

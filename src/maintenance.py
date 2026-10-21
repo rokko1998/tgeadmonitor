@@ -1,4 +1,4 @@
-"""Daily indirect recap and conservative source analysis pauses."""
+"""Daily and monthly reporting and conservative source analysis pauses."""
 from __future__ import annotations
 
 import asyncio
@@ -7,8 +7,9 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from src.settings import Settings
+from src.reporting import format_monthly_report
 from src.storage.database import Database, _utc
-from src.storage.semantic import MSK
+from src.time_utils import MSK, month_bounds
 from src.telegram.formatter import build_indirect_digest
 
 log=logging.getLogger("maintenance")
@@ -38,6 +39,31 @@ class Maintenance:
             self.db.conn.execute("INSERT OR REPLACE INTO runtime_state VALUES('indirect_digest_cutoff',?)", (until,))
         self.notifier.wakeup()
 
+    def monthly_report(self, now: datetime | None = None) -> None:
+        now = (now or datetime.now(MSK)).astimezone(MSK)
+        cursor = self.db.runtime_value("monthly_report_next_period")
+        if cursor is None:
+            # Start with the current month; installing this feature must not
+            # unexpectedly send reports for every historic month in the DB.
+            cursor = now.strftime("%Y-%m")
+            self.db.set_runtime_value("monthly_report_next_period", cursor)
+        while True:
+            _, end = month_bounds(cursor)
+            due = end.replace(hour=self.settings.monthly_report_hour_msk)
+            if now < due:
+                return
+            # Persist the report snapshot, outbox entry and next period together.
+            # A restart catches up each missed month without forming it twice.
+            with self.db.conn:
+                self.db.conn.execute("BEGIN IMMEDIATE")
+                stats = self.db.monthly_report_stats(cursor)
+                payload = {**format_monthly_report(stats), "monthly_stats": stats}
+                self.db.conn.execute("INSERT OR IGNORE INTO system_notifications(key,payload) VALUES(?,?)",
+                                     (f"monthly-report:{cursor}",json.dumps(payload,ensure_ascii=False)))
+                cursor = end.strftime("%Y-%m")
+                self.db.conn.execute("INSERT OR REPLACE INTO runtime_state VALUES('monthly_report_next_period',?)", (cursor,))
+            self.notifier.wakeup()
+
     def assess_sources(self) -> None:
         days=self.settings.source_quality_days
         for source in self.db.source_health(days):
@@ -59,6 +85,7 @@ class Maintenance:
             try:
                 self.db.source_health_tick()
                 self.digest()
+                self.monthly_report()
                 self.assess_sources()
             except Exception:
                 log.exception("Maintenance error")

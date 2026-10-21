@@ -40,6 +40,7 @@ class Settings:
     jev_model: str = "jev-1.14.0"
     jev_monthly_budget_usd: float = 4.0
     digest_hour_msk: int = 21
+    monthly_report_hour_msk: int = 9
     source_quality_days: int = 30
     source_quality_min_messages: int = 1000
 
@@ -55,11 +56,13 @@ class Settings:
         try:
             budget=float(os.getenv("JEV_MONTHLY_BUDGET_USD","4"))
             digest_hour=int(os.getenv("DIGEST_HOUR_MSK","21"))
+            monthly_hour=int(os.getenv("MONTHLY_REPORT_HOUR_MSK","9"))
             quality_days=int(os.getenv("SOURCE_QUALITY_DAYS","30"))
             quality_min=int(os.getenv("SOURCE_QUALITY_MIN_MESSAGES","1000"))
         except ValueError as exc:
             raise SettingsError("Invalid Jev/digest/source settings") from exc
-        if not math.isfinite(budget) or budget<0 or not 0<=digest_hour<=23 or quality_days<1 or quality_min<1:
+        if (not math.isfinite(budget) or budget<0 or not 0<=digest_hour<=23
+                or not 0<=monthly_hour<=23 or quality_days<1 or quality_min<1):
             raise SettingsError("Invalid Jev/digest/source limits")
         return cls(
             api_id=int(_req("API_ID")),
@@ -75,5 +78,6 @@ class Settings:
             jev_enabled=os.getenv("JEV_ENABLED","1")=="1",jev_provider=provider,
             jev_api_key=os.getenv("JEV_API_KEY","").strip(),jev_model=model,
             jev_monthly_budget_usd=budget,digest_hour_msk=digest_hour,
+            monthly_report_hour_msk=monthly_hour,
             source_quality_days=quality_days,source_quality_min_messages=quality_min,
         )

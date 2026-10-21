@@ -13,6 +13,8 @@ from src.metrics import Metrics
 from src.storage.database import Database
 from src.telegram.chat_links import extract_links, parse_link
 from src.telegram.formatter import build_indirect_digest
+from src.reporting import format_monthly_report
+from src.time_utils import MSK, month_bounds
 from src.storage.database import _utc
 
 log = logging.getLogger("notifier")
@@ -52,7 +54,10 @@ HELP = (
     "/jev — расходы, месячный лимит и очередь проверки. "
     "Если лимит исчерпан или API недоступен, сообщения ждут в БД, рассылка без проверки не включается.\n"
     "/jevretry — повторить проверки после устранения ошибки API; месячный лимит сохраняется.\n"
-    "/stats — статистика за всё время; /stats7 — за неделю; /stats30 — за месяц.\n\n"
+    "/stats — статистика за всё время; /stats7 — за неделю; /stats30 — за последние 30 дней.\n\n"
+    "1-го числа в 09:00 МСК — отчёт за предыдущий календарный месяц: сообщения, чаты, "
+    "прямые и непрямые лиды, расходы Jev.\n"
+    "/month — отчёт за текущий месяц на данный момент; /month 2026-10 — за указанный месяц.\n\n"
     "Управление доступно владельцу в личном диалоге либо администраторам настроенной группы. "
     "Пересылка примера боту сама по себе не запускает проверку лида."
 )
@@ -92,6 +97,7 @@ class Notifier:
                     ("unkeep", "Убрать защиту: /unkeep ID"), ("jevretry", "Повторить проверки с ошибкой"),
                     ("stats", "Статистика за всё время"), ("stats7", "Статистика за неделю"),
                     ("stats30", "Статистика за месяц"),
+                    ("month", "Месячный отчёт: /month или /month 2026-10"),
                 )])
         except BotApiError:
             log.warning("Could not update bot command menu")
@@ -226,6 +232,25 @@ class Notifier:
             await self.send_owner(HELP)
         elif command in {"/stats", "/stats7", "/stats30"}:
             await self._send_stats({"/stats": None, "/stats7": 7, "/stats30": 30}[command])
+        elif command == "/month":
+            now = datetime.now(MSK)
+            parts = text.split()
+            period = parts[1] if len(parts) == 2 else now.strftime("%Y-%m")
+            try:
+                start, end = month_bounds(period)
+                if len(parts) > 2 or start > now:
+                    raise ValueError("Invalid report period")
+            except ValueError:
+                await self.send_owner("Формат: /month или /month ГГГГ-ММ, например /month 2026-10. Месяц не должен быть будущим.")
+                return
+            snapshot = self.db.conn.execute("SELECT payload FROM system_notifications WHERE key=?",
+                                            (f"monthly-report:{period}",)).fetchone()
+            if snapshot:
+                payload = json.loads(snapshot["payload"])
+            else:
+                through = now if now < end else None
+                payload = format_monthly_report(self.db.monthly_report_stats(period,through=through),through=through)
+            await self.send_owner(payload["text"])
         elif command == "/chats" and self.chat_manager:
             chats=self.db.source_health()
             resolved=self.chat_manager.listener.resolved
