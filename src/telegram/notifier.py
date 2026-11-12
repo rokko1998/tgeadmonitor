@@ -58,7 +58,7 @@ HELP = (
     "1-го числа в 09:00 МСК — отчёт за предыдущий календарный месяц: сообщения, чаты, "
     "прямые и непрямые лиды, расходы Jev.\n"
     "/month — отчёт за текущий месяц на данный момент; /month 2026-10 — за указанный месяц.\n\n"
-    "Управление доступно владельцу в личном диалоге либо администраторам настроенной группы. "
+    "Управление доступно владельцу в личном диалоге либо администраторам и разрешённым операторам настроенной группы. "
     "Пересылка примера боту сама по себе не запускает проверку лида."
 )
 
@@ -316,11 +316,15 @@ class Notifier:
             member = await self.api("getChatMember", chat_id=self.owner, user_id=sender["id"])
         except (BotApiError, aiohttp.ClientError, asyncio.TimeoutError):
             return False
-        return member.get("status") in {"creator", "administrator"}
+        status = member.get("status")
+        if status in {"creator", "administrator"}:
+            return True
+        still_member = status == "member" or (status == "restricted" and member.get("is_member") is True)
+        return bool(still_member and self.db.is_operator(self.owner,sender["id"]))
 
     async def _handle_callback(self, cb: dict) -> None:
         cb_id = cb["id"]
-        if not await self._authorized(cb.get("from", {}), cb.get("message", {}).get("chat", {}).get("id", self.owner)):
+        if not await self._authorized(cb.get("from", {}), cb.get("message", {}).get("chat", {}).get("id")):
             await self.api("answerCallbackQuery", callback_query_id=cb_id, text="Нет доступа")
             return
         action, _, lead_id = (cb.get("data") or "").partition(":")

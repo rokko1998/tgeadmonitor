@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS source_requests (
     approval_requested INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS bot_operators (
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    display_name TEXT,
+    added_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(chat_id,user_id)
+);
 """
 
 def _utc(dt: datetime | None = None) -> str:
@@ -131,6 +138,20 @@ class Database(SemanticStorage):
             self._add_column("sources", "observed_seconds INTEGER NOT NULL DEFAULT 0", "observed_seconds")
             self._add_column("sources", "auto_join INTEGER NOT NULL DEFAULT 0", "auto_join")
             self.conn.execute("UPDATE sources SET quality_since=datetime('now') WHERE quality_since IS NULL")
+
+    # ---------- operator access ----------
+    def grant_operator(self, chat_id: int, user_id: int, display_name: str | None = None) -> None:
+        if chat_id >= 0 or user_id <= 0:
+            raise ValueError("Operator access requires a group ID and a user ID")
+        with self.conn:
+            self.conn.execute("""INSERT INTO bot_operators(chat_id,user_id,display_name) VALUES(?,?,?)
+                ON CONFLICT(chat_id,user_id) DO UPDATE SET
+                    display_name=COALESCE(excluded.display_name,bot_operators.display_name)""",
+                (chat_id,user_id,display_name))
+
+    def is_operator(self, chat_id: int, user_id: int) -> bool:
+        return self.conn.execute("SELECT 1 FROM bot_operators WHERE chat_id=? AND user_id=?",
+                                 (chat_id,user_id)).fetchone() is not None
 
     # ---------- sources ----------
     def upsert_source(self, c: Chat, added_via: str = "config") -> None:
